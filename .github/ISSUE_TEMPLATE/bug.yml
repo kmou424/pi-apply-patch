@@ -1,0 +1,48 @@
+name: Bug Report
+description: Report broken apply_patch registration, parsing, or patch execution
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Keep this concise. Include the patch body, model, and pi command needed to reproduce.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Include exact output/errors.
+    validations:
+      required: true
+
+  - type: textarea
+    id: patch
+    attributes:
+      label: Patch input
+      description: Paste a minimal patch envelope that reproduces the issue.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: pi-apply-patch version
+      placeholder: 0.1.0
+    validations:
+      required: false
+
+  - type: input
+    id: pi-version
+    attributes:
+      label: pi-coding-agent version
+      placeholder: 0.71.0
+    validations:
+      required: false
