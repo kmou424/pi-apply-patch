@@ -80,6 +80,87 @@ describe("pi-apply-patch", () => {
 		expect(await readFile(path.join(directory, "sample.txt"), "utf-8")).toBe("after\n");
 	});
 
+	it("#given codex multi operation freeform patch #when executed #then applies all operations", async () => {
+		// given
+		const directory = await createTempDirectory();
+		await writeFile(path.join(directory, "modify.txt"), "line1\nline2\n", "utf-8");
+		await writeFile(path.join(directory, "delete.txt"), "obsolete\n", "utf-8");
+		const patch = `*** Begin Patch
+*** Add File: nested/new.txt
++created
+*** Delete File: delete.txt
+*** Update File: modify.txt
+@@
+-line2
++changed
+*** End Patch`;
+
+		// when
+		const summaries = await applyPatch(directory, patch);
+
+		// then
+		expect(summaries).toEqual(["add: nested/new.txt", "delete: delete.txt", "update: modify.txt"]);
+		expect(await readFile(path.join(directory, "nested", "new.txt"), "utf-8")).toBe("created\n");
+		expect(await readFile(path.join(directory, "modify.txt"), "utf-8")).toBe("line1\nchanged\n");
+		await expect(readFile(path.join(directory, "delete.txt"), "utf-8")).rejects.toMatchObject({ code: "ENOENT" });
+	});
+
+	it("#given codex patch with contextual chunks #when executed #then applies chunks in order", async () => {
+		// given
+		const directory = await createTempDirectory();
+		await writeFile(path.join(directory, "multi.txt"), "alpha\none\nbeta\ntwo\n", "utf-8");
+		const patch = `*** Begin Patch
+*** Update File: multi.txt
+@@ alpha
+-one
++ONE
+@@ beta
+-two
++TWO
+*** End Patch`;
+
+		// when
+		await applyPatch(directory, patch);
+
+		// then
+		expect(await readFile(path.join(directory, "multi.txt"), "utf-8")).toBe("alpha\nONE\nbeta\nTWO\n");
+	});
+
+	it("#given codex patch with heredoc wrapper #when executed #then strips wrapper", async () => {
+		// given
+		const directory = await createTempDirectory();
+		const patch = `<<'EOF'
+*** Begin Patch
+*** Add File: heredoc.txt
++ok
+*** End Patch
+EOF`;
+
+		// when
+		await applyPatch(directory, patch);
+
+		// then
+		expect(await readFile(path.join(directory, "heredoc.txt"), "utf-8")).toBe("ok\n");
+	});
+
+	it("#given codex patch with fuzzy context #when executed #then matches like codex", async () => {
+		// given
+		const directory = await createTempDirectory();
+		await writeFile(path.join(directory, "fuzzy.txt"), "name = “old”  \n", "utf-8");
+		const patch = `*** Begin Patch
+*** Update File: fuzzy.txt
+@@
+-name = "old"
++name = "new"
+*** End Patch`;
+
+		// when
+		await applyPatch(directory, patch);
+
+		// then
+		expect(await readFile(path.join(directory, "fuzzy.txt"), "utf-8")).toBe('name = "new"\n');
+	});
+
 	it("#given absolute workspace paths #when executed #then applies patch like codex", async () => {
 		// given
 		const directory = await createTempDirectory();
@@ -110,7 +191,7 @@ describe("pi-apply-patch", () => {
 		await applyPatch(directory, patch);
 
 		// then
-		expect(await readFile(absoluteAddPath, "utf-8")).toBe("created");
+		expect(await readFile(absoluteAddPath, "utf-8")).toBe("created\n");
 		await expect(readFile(absoluteDeletePath, "utf-8")).rejects.toMatchObject({ code: "ENOENT" });
 		expect(await readFile(absoluteUpdatePath, "utf-8")).toBe("after\n");
 		await expect(readFile(absoluteMoveSourcePath, "utf-8")).rejects.toMatchObject({ code: "ENOENT" });
@@ -130,6 +211,32 @@ describe("pi-apply-patch", () => {
 		await expect(applyPatch(directory, patch)).rejects.toThrow(
 			"File references must stay within the current workspace.",
 		);
+	});
+
+	it("#given invalid codex hunk header #when executed #then reports parser diagnostic", async () => {
+		// given
+		const directory = await createTempDirectory();
+		const patch = `*** Begin Patch
+*** Frobnicate File: foo
+*** End Patch`;
+
+		// when / then
+		await expect(applyPatch(directory, patch)).rejects.toThrow("is not a valid hunk header");
+	});
+
+	it("#given missing codex context #when executed #then reports expected lines", async () => {
+		// given
+		const directory = await createTempDirectory();
+		await writeFile(path.join(directory, "modify.txt"), "line1\nline2\n", "utf-8");
+		const patch = `*** Begin Patch
+*** Update File: modify.txt
+@@
+-missing
++changed
+*** End Patch`;
+
+		// when / then
+		await expect(applyPatch(directory, patch)).rejects.toThrow("Failed to find expected lines in modify.txt");
 	});
 
 	it("#given patch text #when extracting paths #then returns touched files", () => {
