@@ -6,7 +6,7 @@ import {
 	APPLY_PATCH_LARK_GRAMMAR,
 	type ApplyPatchExtensionAPI,
 	applyPatch,
-	type createApplyPatchTool,
+	createApplyPatchTool,
 	extractPatchedPaths,
 	type FreeformToolFormat,
 	isOpenAIGptModel,
@@ -78,6 +78,39 @@ describe("pi-apply-patch", () => {
 
 		// then
 		expect(await readFile(path.join(directory, "sample.txt"), "utf-8")).toBe("after\n");
+	});
+
+	it("#given apply_patch tool execution #when started #then emits pending TUI update", async () => {
+		// given
+		const directory = await createTempDirectory();
+		await writeFile(path.join(directory, "sample.txt"), "before\n", "utf-8");
+		const patch = `*** Begin Patch
+*** Update File: sample.txt
+@@
+-before
++after
+*** Add File: created.txt
++created
+*** End Patch`;
+		const tool = createApplyPatchTool();
+		const updates: string[] = [];
+
+		// when
+		await tool.execute(
+			"apply-patch-test",
+			{ input: patch },
+			undefined,
+			(update) => {
+				const firstText = update.content.find((block) => block.type === "text")?.text;
+				if (firstText) {
+					updates.push(firstText);
+				}
+			},
+			{ cwd: directory } as never,
+		);
+
+		// then
+		expect(updates[0]).toBe("Applying patch...\n• sample.txt\n• created.txt");
 	});
 
 	it("#given codex multi operation freeform patch #when executed #then applies all operations", async () => {

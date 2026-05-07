@@ -163,6 +163,14 @@ export function extractPatchedPaths(patchText: string): string[] {
 	return Array.from(matches, (match) => match[1] ?? "");
 }
 
+function formatPendingPatchUpdate(patchText: string): string {
+	const paths = extractPatchedPaths(patchText);
+	if (paths.length === 0) {
+		return "Applying patch...";
+	}
+	return `Applying patch...\n${paths.map((filePath) => `• ${filePath}`).join("\n")}`;
+}
+
 function parsePatch(patchText: string): ParsedPatch[] {
 	const normalized = stripHeredoc(normalizePatchText(patchText).trim()).trim();
 	const lines = normalized.split("\n");
@@ -526,11 +534,16 @@ export function createApplyPatchTool(): ApplyPatchToolDefinition {
 		description: APPLY_PATCH_FREEFORM_DESCRIPTION,
 		parameters: APPLY_PATCH_PARAMS,
 		prepareArguments: normalizeApplyPatchArguments,
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
+		async execute(_toolCallId, params, _signal, onUpdate, ctx): Promise<AgentToolResult<unknown>> {
 			const normalizedParams = normalizeApplyPatchArguments(params);
 			if (!normalizedParams.input) {
 				throw new Error("input is required");
 			}
+
+			onUpdate?.({
+				content: [{ type: "text", text: formatPendingPatchUpdate(normalizedParams.input) }],
+				details: undefined,
+			});
 
 			const summaries = await applyPatch(ctx.cwd, normalizedParams.input);
 			return {
