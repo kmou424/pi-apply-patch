@@ -3,7 +3,8 @@ import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
 import { defineTool, type ExtensionAPI, type ToolDefinition } from "@mariozechner/pi-coding-agent";
-import { createTwoFilesPatch } from "diff";
+import { Box, Container, Spacer, Text } from "@mariozechner/pi-tui";
+import * as Diff from "diff";
 import { Type } from "typebox";
 
 const APPLY_PATCH_PARAMS = Type.Object({
@@ -34,7 +35,7 @@ export type FreeformToolFormat = {
 	definition: string;
 };
 
-type ApplyPatchToolDefinition = ToolDefinition<typeof APPLY_PATCH_PARAMS> & {
+type ApplyPatchToolDefinition = ToolDefinition<typeof APPLY_PATCH_PARAMS, ApplyPatchToolDetails | undefined> & {
 	freeform: FreeformToolFormat;
 };
 
@@ -45,6 +46,46 @@ export type ApplyPatchExtensionAPI = Pick<ExtensionAPI, "on" | "getActiveTools" 
 type ApplyPatchParams = {
 	input: string;
 };
+
+type ApplyPatchOperation = "add" | "delete" | "update";
+
+type ApplyPatchPreviewFile = {
+	filePath: string;
+	movePath?: string;
+	operation: ApplyPatchOperation;
+	diff: string;
+	added: number;
+	removed: number;
+};
+
+type ApplyPatchPreview = {
+	files: ApplyPatchPreviewFile[];
+	added: number;
+	removed: number;
+};
+
+type ApplyPatchToolDetails = {
+	preview?: ApplyPatchPreview;
+};
+
+type ApplyPatchThemeColor =
+	| "accent"
+	| "error"
+	| "muted"
+	| "toolDiffAdded"
+	| "toolDiffContext"
+	| "toolDiffRemoved"
+	| "toolOutput"
+	| "toolTitle";
+
+type ApplyPatchTheme = {
+	fg: (name: ApplyPatchThemeColor, text: string) => string;
+	bg: (name: "toolPendingBg" | "toolSuccessBg", text: string) => string;
+	bold: (text: string) => string;
+	inverse: (text: string) => string;
+};
+
+const GPT_APPLY_PATCH_PROVIDERS = new Set(["openai", "azure-openai-responses", "github-copilot"]);
 
 function normalizeApplyPatchArguments(args: unknown): ApplyPatchParams {
 	if (typeof args === "string") {
@@ -89,7 +130,7 @@ export const CODEX_APPLY_PATCH_DESCRIPTION =
 	'Use the `apply_patch` tool to edit files.\nYour patch language is a stripped‑down, file‑oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high‑level envelope:\n\n*** Begin Patch\n[ one or more file sections ]\n*** End Patch\n\nWithin that envelope, you get a sequence of file operations.\nYou MUST include a header to specify the action you are taking.\nEach operation starts with one of three headers:\n\n*** Add File: <path> - create a new file. Every following line is a + line (the initial contents).\n*** Delete File: <path> - remove an existing file. Nothing follows.\n*** Update File: <path> - patch an existing file in place (optionally with a rename).\n\nMay be immediately followed by *** Move to: <new path> if you want to rename the file.\nThen one or more “hunks”, each introduced by @@ (optionally followed by a hunk header).\nWithin a hunk each line starts with:\n\nFor instructions on [context_before] and [context_after]:\n- By default, show 3 lines of code immediately above and 3 lines immediately below each change. If a change is within 3 lines of a previous change, do NOT duplicate the first change’s [context_after] lines in the second change’s [context_before] lines.\n- If 3 lines of context is insufficient to uniquely identify the snippet of code within the file, use the @@ operator to indicate the class or function to which the snippet belongs. For instance, we might have:\n@@ class BaseClass\n[3 lines of pre-context]\n- [old_code]\n+ [new_code]\n[3 lines of post-context]\n\n- If a code block is repeated so many times in a class or function such that even a single `@@` statement and 3 lines of context cannot uniquely identify the snippet of code, you can use multiple `@@` statements to jump to the right context. For instance:\n\n@@ class BaseClass\n@@ \t def method():\n[3 lines of pre-context]\n- [old_code]\n+ [new_code]\n[3 lines of post-context]\n\nThe full grammar definition is below:\nPatch := Begin { FileOp } End\nBegin := "*** Begin Patch" NEWLINE\nEnd := "*** End Patch" NEWLINE\nFileOp := AddFile | DeleteFile | UpdateFile\nAddFile := "*** Add File: " path NEWLINE { "+" line NEWLINE }\nDeleteFile := "*** Delete File: " path NEWLINE\nUpdateFile := "*** Update File: " path NEWLINE [ MoveTo ] { Hunk }\nMoveTo := "*** Move to: " newPath NEWLINE\nHunk := "@@" [ header ] NEWLINE { HunkLine } [ "*** End of File" NEWLINE ]\nHunkLine := (" " | "-" | "+") text NEWLINE\n\nA full patch can combine several operations:\n\n*** Begin Patch\n*** Add File: hello.txt\n+Hello world\n*** Update File: src/app.py\n*** Move to: src/main.py\n@@ def greet():\n-print("Hi")\n+print("Hello, world!")\n*** Delete File: obsolete.txt\n*** End Patch\n\nIt is important to remember:\n\n- You must include a header with your intended action (Add/Delete/Update)\n- You must prefix new lines with `+` even when creating a new file\n- File references can only be relative, NEVER ABSOLUTE.\n';
 
 export function isOpenAIGptModel(model: Pick<Model<string>, "provider" | "id"> | undefined): boolean {
-	return model?.provider === "openai" && model.id.startsWith("gpt-");
+	return model !== undefined && GPT_APPLY_PATCH_PROVIDERS.has(model.provider) && model.id.startsWith("gpt-");
 }
 
 function normalizePatchText(patchText: string): string {
@@ -164,45 +205,45 @@ export function extractPatchedPaths(patchText: string): string[] {
 	return Array.from(matches, (match) => match[1] ?? "");
 }
 
-function trimDiff(diff: string): string {
-	const lines = diff.split("\n");
-	const contentLines = lines.filter(
-		(line) =>
-			(line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")) &&
-			!line.startsWith("---") &&
-			!line.startsWith("+++"),
-	);
-	if (contentLines.length === 0) {
-		return diff;
-	}
+function createPatchDiff(oldContent: string, newContent: string): { diff: string; added: number; removed: number } {
+	const parts = Diff.diffLines(oldContent, newContent);
+	const oldLines = oldContent.split("\n");
+	const newLines = newContent.split("\n");
+	const lineNumWidth = String(Math.max(oldLines.length, newLines.length)).length;
+	const output: string[] = [];
+	let oldLineNum = 1;
+	let newLineNum = 1;
+	let added = 0;
+	let removed = 0;
 
-	let minIndent = Number.POSITIVE_INFINITY;
-	for (const line of contentLines) {
-		const content = line.slice(1);
-		if (content.trim().length > 0) {
-			minIndent = Math.min(minIndent, content.match(/^(\s*)/)?.[1]?.length ?? 0);
+	for (const part of parts) {
+		const rawLines = part.value.split("\n");
+		if (rawLines[rawLines.length - 1] === "") {
+			rawLines.pop();
+		}
+
+		for (const line of rawLines) {
+			if (part.added) {
+				output.push(`+${String(newLineNum).padStart(lineNumWidth, " ")} ${line}`);
+				newLineNum++;
+				added++;
+				continue;
+			}
+
+			if (part.removed) {
+				output.push(`-${String(oldLineNum).padStart(lineNumWidth, " ")} ${line}`);
+				oldLineNum++;
+				removed++;
+				continue;
+			}
+
+			output.push(` ${String(oldLineNum).padStart(lineNumWidth, " ")} ${line}`);
+			oldLineNum++;
+			newLineNum++;
 		}
 	}
-	if (minIndent === Number.POSITIVE_INFINITY || minIndent === 0) {
-		return diff;
-	}
 
-	return lines
-		.map((line) => {
-			if (
-				(line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")) &&
-				!line.startsWith("---") &&
-				!line.startsWith("+++")
-			) {
-				return `${line[0] ?? ""}${line.slice(1 + minIndent)}`;
-			}
-			return line;
-		})
-		.join("\n");
-}
-
-function createPatchDiff(oldPath: string, newPath: string, oldContent: string, newContent: string): string {
-	return trimDiff(createTwoFilesPatch(oldPath, newPath, oldContent, newContent).trimEnd());
+	return { diff: output.join("\n"), added, removed };
 }
 
 async function readExistingFileForPreview(absolutePath: string): Promise<string> {
@@ -216,6 +257,72 @@ async function readExistingFileForPreview(absolutePath: string): Promise<string>
 	}
 }
 
+function formatLineCountSummary(added: number, removed: number): string {
+	return `(+${added} -${removed})`;
+}
+
+function formatPatchFilePath(file: ApplyPatchPreviewFile): string {
+	return file.movePath ? `${file.filePath} → ${file.movePath}` : file.filePath;
+}
+
+function formatPatchOperation(operation: ApplyPatchOperation): string {
+	if (operation === "add") {
+		return "Added";
+	}
+	if (operation === "delete") {
+		return "Deleted";
+	}
+	return "Edited";
+}
+
+function formatPatchPreview(preview: ApplyPatchPreview): string {
+	const lines: string[] = [];
+	if (preview.files.length === 1) {
+		const file = preview.files[0];
+		if (file) {
+			lines.push(
+				`• ${formatPatchOperation(file.operation)} ${formatPatchFilePath(file)} ${formatLineCountSummary(file.added, file.removed)}`,
+			);
+			if (file.diff) {
+				lines.push(...file.diff.split("\n").map((line) => `  ${line}`));
+			}
+		}
+		return lines.join("\n");
+	}
+
+	const noun = preview.files.length === 1 ? "file" : "files";
+	lines.push(`• Edited ${preview.files.length} ${noun} ${formatLineCountSummary(preview.added, preview.removed)}`);
+	for (const file of preview.files) {
+		lines.push(`  └ ${formatPatchFilePath(file)} ${formatLineCountSummary(file.added, file.removed)}`);
+		if (file.diff) {
+			lines.push(...file.diff.split("\n").map((line) => `    ${line}`));
+		}
+	}
+	return lines.join("\n");
+}
+
+function renderPatchPreview(preview: ApplyPatchPreview, theme: ApplyPatchTheme): string {
+	return formatPatchPreview(preview)
+		.split("\n")
+		.map((line) => {
+			const trimmed = line.trimStart();
+			if (trimmed.startsWith("+")) {
+				return theme.fg("toolDiffAdded", line);
+			}
+			if (trimmed.startsWith("-")) {
+				return theme.fg("toolDiffRemoved", line);
+			}
+			if (trimmed.startsWith("•")) {
+				return theme.fg("toolTitle", theme.bold(line));
+			}
+			if (trimmed.startsWith("└")) {
+				return theme.fg("accent", line);
+			}
+			return theme.fg("toolDiffContext", line);
+		})
+		.join("\n");
+}
+
 function formatPendingPatchPaths(patchText: string): string {
 	const paths = extractPatchedPaths(patchText);
 	if (paths.length === 0) {
@@ -224,19 +331,21 @@ function formatPendingPatchPaths(patchText: string): string {
 	return `Applying patch...\n${paths.map((filePath) => `• ${filePath}`).join("\n")}`;
 }
 
-async function createPatchPreview(cwd: string, hunks: ParsedPatch[]): Promise<string> {
-	const diffs: string[] = [];
+async function createPatchPreview(cwd: string, hunks: ParsedPatch[]): Promise<ApplyPatchPreview> {
+	const files: ApplyPatchPreviewFile[] = [];
 	for (const hunk of hunks) {
 		const absolutePath = await resolveWorkspacePath(cwd, hunk.filePath);
 		if (hunk.type === "add") {
 			const oldContent = await readExistingFileForPreview(absolutePath);
-			diffs.push(createPatchDiff(hunk.filePath, hunk.filePath, oldContent, hunk.content));
+			const diff = createPatchDiff(oldContent, hunk.content);
+			files.push({ filePath: hunk.filePath, operation: oldContent.length > 0 ? "update" : "add", ...diff });
 			continue;
 		}
 
 		if (hunk.type === "delete") {
 			const oldContent = await readFile(absolutePath, "utf-8");
-			diffs.push(createPatchDiff(hunk.filePath, hunk.filePath, oldContent, ""));
+			const diff = createPatchDiff(oldContent, "");
+			files.push({ filePath: hunk.filePath, operation: "delete", ...diff });
 			continue;
 		}
 
@@ -245,9 +354,15 @@ async function createPatchPreview(cwd: string, hunks: ParsedPatch[]): Promise<st
 		if (hunk.movePath) {
 			await resolveWorkspacePath(cwd, hunk.movePath);
 		}
-		diffs.push(createPatchDiff(hunk.filePath, hunk.movePath ?? hunk.filePath, oldContent, newContent));
+		const diff = createPatchDiff(oldContent, newContent);
+		files.push({ filePath: hunk.filePath, movePath: hunk.movePath, operation: "update", ...diff });
 	}
-	return diffs.filter((diff) => diff.trim().length > 0).join("\n");
+
+	return {
+		files,
+		added: files.reduce((sum, file) => sum + file.added, 0),
+		removed: files.reduce((sum, file) => sum + file.removed, 0),
+	};
 }
 
 function parsePatch(patchText: string): ParsedPatch[] {
@@ -514,22 +629,25 @@ export async function applyPatch(cwd: string, patchText: string): Promise<string
 	return applyParsedPatch(cwd, hunks);
 }
 
-async function createPendingPatchUpdate(cwd: string, patchText: string): Promise<string> {
+async function createPendingPatchUpdate(
+	cwd: string,
+	patchText: string,
+): Promise<{ text: string; details: ApplyPatchToolDetails | undefined }> {
 	try {
 		const hunks = parsePatch(patchText);
 		if (hunks.length === 0) {
-			return "Applying patch...";
+			return { text: "Applying patch...", details: undefined };
 		}
 
-		const diff = await createPatchPreview(cwd, hunks);
-		if (diff.trim().length > 0) {
-			return `Applying patch...\n${diff}`;
+		const preview = await createPatchPreview(cwd, hunks);
+		if (preview.files.some((file) => file.diff.trim().length > 0)) {
+			return { text: `Applying patch...\n${formatPatchPreview(preview)}`, details: { preview } };
 		}
 	} catch {
-		return formatPendingPatchPaths(patchText);
+		return { text: formatPendingPatchPaths(patchText), details: undefined };
 	}
 
-	return formatPendingPatchPaths(patchText);
+	return { text: formatPendingPatchPaths(patchText), details: undefined };
 }
 
 function hasEditTools(toolNames: string[]): boolean {
@@ -631,15 +749,27 @@ export function createApplyPatchTool(): ApplyPatchToolDefinition {
 		description: APPLY_PATCH_FREEFORM_DESCRIPTION,
 		parameters: APPLY_PATCH_PARAMS,
 		prepareArguments: normalizeApplyPatchArguments,
-		async execute(_toolCallId, params, _signal, onUpdate, ctx): Promise<AgentToolResult<unknown>> {
+		promptSnippet: "Apply Codex-format file patches with apply_patch",
+		promptGuidelines: [
+			"Use apply_patch for file edits instead of mutating files through bash, Python scripts, heredocs, or shell redirection.",
+			"After apply_patch succeeds, do not re-read the edited files just to confirm the patch applied.",
+		],
+		async execute(
+			_toolCallId,
+			params,
+			_signal,
+			onUpdate,
+			ctx,
+		): Promise<AgentToolResult<ApplyPatchToolDetails | undefined>> {
 			const normalizedParams = normalizeApplyPatchArguments(params);
 			if (!normalizedParams.input) {
 				throw new Error("input is required");
 			}
 
+			const pendingUpdate = await createPendingPatchUpdate(ctx.cwd, normalizedParams.input);
 			onUpdate?.({
-				content: [{ type: "text", text: await createPendingPatchUpdate(ctx.cwd, normalizedParams.input) }],
-				details: undefined,
+				content: [{ type: "text", text: pendingUpdate.text }],
+				details: pendingUpdate.details,
 			});
 
 			const summaries = await applyPatch(ctx.cwd, normalizedParams.input);
@@ -647,6 +777,32 @@ export function createApplyPatchTool(): ApplyPatchToolDefinition {
 				content: [{ type: "text", text: summaries.join("\n") }],
 				details: {},
 			};
+		},
+		renderCall(_args, theme) {
+			return new Text(theme.fg("toolTitle", theme.bold("apply_patch")), 0, 0);
+		},
+		renderResult(result, options, theme) {
+			const component = new Container();
+			const preview = result.details?.preview;
+			if (preview) {
+				const bgName = options.isPartial ? "toolPendingBg" : "toolSuccessBg";
+				const box = new Box(1, 1, (text: string) => theme.bg(bgName, text));
+				box.addChild(new Text(theme.fg("toolTitle", theme.bold("Applying patch")), 0, 0));
+				box.addChild(new Spacer(1));
+				box.addChild(new Text(renderPatchPreview(preview, theme), 0, 0));
+				component.addChild(box);
+				return component;
+			}
+
+			const text = result.content
+				.filter((block) => block.type === "text")
+				.map((block) => block.text)
+				.filter((value) => typeof value === "string" && value.length > 0)
+				.join("\n");
+			if (text) {
+				component.addChild(new Text(theme.fg("toolOutput", text), 0, 0));
+			}
+			return component;
 		},
 	});
 

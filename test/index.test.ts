@@ -14,6 +14,14 @@ import {
 } from "../src/index.js";
 
 const tempDirectories: string[] = [];
+const identityTheme = {
+	fg: (_name: string, text: string) => text,
+	bg: (_name: string, text: string) => text,
+	bold: (text: string) => text,
+	inverse: (text: string) => text,
+};
+type ApplyPatchTool = ReturnType<typeof createApplyPatchTool>;
+type ApplyPatchUpdate = Parameters<NonNullable<Parameters<ApplyPatchTool["execute"]>[3]>>[0];
 
 async function createTempDirectory(): Promise<string> {
 	const directory = await mkdtemp(path.join(process.cwd(), "test-temp-"));
@@ -93,7 +101,7 @@ describe("pi-apply-patch", () => {
 +created
 *** End Patch`;
 		const tool = createApplyPatchTool();
-		const updates: string[] = [];
+		const updates: Array<{ text: string; update: ApplyPatchUpdate }> = [];
 
 		// when
 		await tool.execute(
@@ -103,20 +111,38 @@ describe("pi-apply-patch", () => {
 			(update) => {
 				const firstText = update.content.find((block) => block.type === "text")?.text;
 				if (firstText) {
-					updates.push(firstText);
+					updates.push({ text: firstText, update });
 				}
 			},
 			{ cwd: directory } as never,
 		);
 
 		// then
-		expect(updates[0]).toContain("Applying patch...\nIndex: sample.txt");
-		expect(updates[0]).toContain("--- sample.txt");
-		expect(updates[0]).toContain("+++ sample.txt");
-		expect(updates[0]).toContain("-before");
-		expect(updates[0]).toContain("+after");
-		expect(updates[0]).toContain("Index: created.txt");
-		expect(updates[0]).toContain("+created");
+		const update = updates[0];
+		expect(update).toBeDefined();
+		if (!update) {
+			throw new Error("apply_patch did not emit a pending update");
+		}
+		expect(update.text).toContain("Applying patch...\n• Edited 2 files (+2 -1)");
+		expect(update.text).toContain("sample.txt (+1 -1)");
+		expect(update.text).toContain("-1 before");
+		expect(update.text).toContain("+1 after");
+		expect(update.text).toContain("created.txt (+1 -0)");
+		expect(update.text).toContain("+1 created");
+		expect(update.text).not.toContain("Index:");
+
+		const component = tool.renderResult?.(
+			{ content: [{ type: "text", text: update.text }], details: update.update.details },
+			{ expanded: false, isPartial: true },
+			identityTheme as never,
+			{ lastComponent: undefined } as never,
+		);
+		const rendered = component?.render(120).join("\n") ?? "";
+		expect(rendered).toContain("Applying patch");
+		expect(rendered).toContain("• Edited 2 files (+2 -1)");
+		expect(rendered).toContain("sample.txt (+1 -1)");
+		expect(rendered).toContain("+1 after");
+		expect(rendered).not.toContain("Index:");
 	});
 
 	it("#given add patch overwriting existing file #when started #then pending diff shows removed content", async () => {
@@ -144,9 +170,9 @@ describe("pi-apply-patch", () => {
 		);
 
 		// then
-		expect(updates[0]).toContain("Index: existing.txt");
-		expect(updates[0]).toContain("-old");
-		expect(updates[0]).toContain("+new");
+		expect(updates[0]).toContain("• Edited existing.txt (+1 -1)");
+		expect(updates[0]).toContain("-1 old");
+		expect(updates[0]).toContain("+1 new");
 		expect(await readFile(path.join(directory, "existing.txt"), "utf-8")).toBe("new\n");
 	});
 
