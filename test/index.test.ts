@@ -80,6 +80,58 @@ describe("pi-apply-patch", () => {
 		expect(await readFile(path.join(directory, "sample.txt"), "utf-8")).toBe("after\n");
 	});
 
+	it("#given absolute workspace paths #when executed #then applies patch like codex", async () => {
+		// given
+		const directory = await createTempDirectory();
+		const absoluteAddPath = path.join(directory, "absolute-add.txt");
+		const absoluteDeletePath = path.join(directory, "absolute-delete.txt");
+		const absoluteUpdatePath = path.join(directory, "absolute-update.txt");
+		const absoluteMoveSourcePath = path.join(directory, "absolute-move-source.txt");
+		const absoluteMoveDestinationPath = path.join(directory, "nested", "absolute-move-destination.txt");
+		await writeFile(absoluteDeletePath, "delete me\n", "utf-8");
+		await writeFile(absoluteUpdatePath, "before\n", "utf-8");
+		await writeFile(absoluteMoveSourcePath, "move me\n", "utf-8");
+		const patch = `*** Begin Patch
+*** Add File: ${absoluteAddPath}
++created
+*** Delete File: ${absoluteDeletePath}
+*** Update File: ${absoluteUpdatePath}
+@@
+-before
++after
+*** Update File: ${absoluteMoveSourcePath}
+*** Move to: ${absoluteMoveDestinationPath}
+@@
+-move me
++moved
+*** End Patch`;
+
+		// when
+		await applyPatch(directory, patch);
+
+		// then
+		expect(await readFile(absoluteAddPath, "utf-8")).toBe("created");
+		await expect(readFile(absoluteDeletePath, "utf-8")).rejects.toMatchObject({ code: "ENOENT" });
+		expect(await readFile(absoluteUpdatePath, "utf-8")).toBe("after\n");
+		await expect(readFile(absoluteMoveSourcePath, "utf-8")).rejects.toMatchObject({ code: "ENOENT" });
+		expect(await readFile(absoluteMoveDestinationPath, "utf-8")).toBe("moved\n");
+	});
+
+	it("#given absolute path outside workspace #when executed #then rejects patch", async () => {
+		// given
+		const directory = await createTempDirectory();
+		const outsidePath = path.join(path.dirname(directory), "outside-apply-patch.txt");
+		const patch = `*** Begin Patch
+*** Add File: ${outsidePath}
++outside
+*** End Patch`;
+
+		// when / then
+		await expect(applyPatch(directory, patch)).rejects.toThrow(
+			"File references must stay within the current workspace.",
+		);
+	});
+
 	it("#given patch text #when extracting paths #then returns touched files", () => {
 		// given
 		const patch = `*** Begin Patch
