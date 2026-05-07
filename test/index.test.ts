@@ -143,6 +143,25 @@ EOF`;
 		expect(await readFile(path.join(directory, "heredoc.txt"), "utf-8")).toBe("ok\n");
 	});
 
+	it("#given codex patch with end-of-file marker #when executed #then only matches file ending", async () => {
+		// given
+		const directory = await createTempDirectory();
+		await writeFile(path.join(directory, "eof.txt"), "target\nkeep\ntarget\n", "utf-8");
+		const patch = `*** Begin Patch
+*** Update File: eof.txt
+@@
+-target
++done
+*** End of File
+*** End Patch`;
+
+		// when
+		await applyPatch(directory, patch);
+
+		// then
+		expect(await readFile(path.join(directory, "eof.txt"), "utf-8")).toBe("target\nkeep\ndone\n");
+	});
+
 	it("#given codex patch with fuzzy context #when executed #then matches like codex", async () => {
 		// given
 		const directory = await createTempDirectory();
