@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -126,6 +126,31 @@ describe("pi-apply-patch", () => {
 		expect(await readFile(path.join(directory, "multi.txt"), "utf-8")).toBe("alpha\nONE\nbeta\nTWO\n");
 	});
 
+	it("#given codex patch with stacked contexts #when executed #then narrows before replacing", async () => {
+		// given
+		const directory = await createTempDirectory();
+		await writeFile(
+			path.join(directory, "stacked.txt"),
+			"class Alpha {\n  method() {\n    x = 1\n  }\n}\nclass Beta {\n  method() {\n    x = 1\n  }\n}\n",
+			"utf-8",
+		);
+		const patch = `*** Begin Patch
+*** Update File: stacked.txt
+@@ class Beta {
+@@   method() {
+-    x = 1
++    x = 2
+*** End Patch`;
+
+		// when
+		await applyPatch(directory, patch);
+
+		// then
+		expect(await readFile(path.join(directory, "stacked.txt"), "utf-8")).toBe(
+			"class Alpha {\n  method() {\n    x = 1\n  }\n}\nclass Beta {\n  method() {\n    x = 2\n  }\n}\n",
+		);
+	});
+
 	it("#given codex patch with heredoc wrapper #when executed #then strips wrapper", async () => {
 		// given
 		const directory = await createTempDirectory();
@@ -217,12 +242,45 @@ EOF`;
 		expect(await readFile(absoluteMoveDestinationPath, "utf-8")).toBe("moved\n");
 	});
 
+	it("#given rename-only codex patch #when executed #then moves file without changing content", async () => {
+		// given
+		const directory = await createTempDirectory();
+		await writeFile(path.join(directory, "old.txt"), "no trailing newline", "utf-8");
+		const patch = `*** Begin Patch
+*** Update File: old.txt
+*** Move to: new.txt
+*** End Patch`;
+
+		// when
+		await applyPatch(directory, patch);
+
+		// then
+		await expect(readFile(path.join(directory, "old.txt"), "utf-8")).rejects.toMatchObject({ code: "ENOENT" });
+		expect(await readFile(path.join(directory, "new.txt"), "utf-8")).toBe("no trailing newline");
+	});
+
 	it("#given absolute path outside workspace #when executed #then rejects patch", async () => {
 		// given
 		const directory = await createTempDirectory();
 		const outsidePath = path.join(path.dirname(directory), "outside-apply-patch.txt");
 		const patch = `*** Begin Patch
 *** Add File: ${outsidePath}
++outside
+*** End Patch`;
+
+		// when / then
+		await expect(applyPatch(directory, patch)).rejects.toThrow(
+			"File references must stay within the current workspace.",
+		);
+	});
+
+	it("#given symlink escaping workspace #when executed #then rejects patch", async () => {
+		// given
+		const directory = await createTempDirectory();
+		const outsideDirectory = await createTempDirectory();
+		await symlink(outsideDirectory, path.join(directory, "link"), "dir");
+		const patch = `*** Begin Patch
+*** Add File: link/outside.txt
 +outside
 *** End Patch`;
 
@@ -267,10 +325,12 @@ EOF`;
 +new
 *** Add File: src/new.ts
 +content
+*** Update File: src/old.ts
+*** Move to: src/moved.ts
 *** End Patch`;
 
 		// when / then
-		expect(extractPatchedPaths(patch)).toEqual(["src/app.ts", "src/new.ts"]);
+		expect(extractPatchedPaths(patch)).toEqual(["src/app.ts", "src/new.ts", "src/old.ts", "src/moved.ts"]);
 	});
 
 	it("#given model metadata #when checking GPT activation #then only OpenAI GPT models match", () => {
