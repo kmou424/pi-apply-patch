@@ -125,7 +125,7 @@ describe("pi-apply-patch", () => {
 		if (!update) {
 			throw new Error("apply_patch did not emit a pending update");
 		}
-		expect(update.text).toContain("Applying patch...\n• Edited 2 files (+2 -1)");
+		expect(update.text).toContain("Applying patch (0/2)...\n• Edited 2 files (+2 -1)");
 		expect(update.text).toContain("sample.txt (+1 -1)");
 		expect(update.text).toContain("-1 before");
 		expect(update.text).toContain("+1 after");
@@ -145,6 +145,46 @@ describe("pi-apply-patch", () => {
 		expect(rendered).toContain("sample.txt (+1 -1)");
 		expect(rendered).toContain("+1 after");
 		expect(rendered).not.toContain("Index:");
+	});
+
+	it("#given multi file apply_patch tool execution #when applying #then emits realtime progress updates", async () => {
+		// given
+		const directory = await createTempDirectory();
+		await writeFile(path.join(directory, "first.txt"), "one\n", "utf-8");
+		await writeFile(path.join(directory, "second.txt"), "two\n", "utf-8");
+		const patch = `*** Begin Patch
+*** Update File: first.txt
+@@
+-one
++ONE
+*** Update File: second.txt
+@@
+-two
++TWO
+*** End Patch`;
+		const tool = createApplyPatchTool();
+		const updates: ApplyPatchUpdate[] = [];
+
+		// when
+		await tool.execute(
+			"apply-patch-progress-test",
+			{ input: patch },
+			undefined,
+			(update) => {
+				updates.push(update);
+			},
+			{ cwd: directory } as never,
+		);
+
+		// then
+		expect(updates).toHaveLength(3);
+		expect(updates[0]?.details?.progress).toEqual({ applied: 0, failed: 0, total: 2 });
+		expect(updates[1]?.details?.progress).toEqual({ applied: 1, failed: 0, total: 2 });
+		expect(updates[2]?.details?.progress).toEqual({ applied: 2, failed: 0, total: 2 });
+		expect(updates[1]?.content.find((block) => block.type === "text")?.text).toContain("Applying patch (1/2)...");
+		expect(updates[2]?.content.find((block) => block.type === "text")?.text).toContain("Applying patch (2/2)...");
+		expect(await readFile(path.join(directory, "first.txt"), "utf-8")).toBe("ONE\n");
+		expect(await readFile(path.join(directory, "second.txt"), "utf-8")).toBe("TWO\n");
 	});
 
 	it("#given add patch overwriting existing file #when started #then pending diff shows removed content", async () => {

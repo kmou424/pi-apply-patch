@@ -267,6 +267,46 @@ describe("render helpers", () => {
 		expect(rendered).toContain("<fg:toolDiffContext> </fg:toolDiffContext><fg:muted>2</fg:muted> same");
 	});
 
+	it("#given partial progress preview #when rendering result #then shows realtime progress in pending widget", () => {
+		// given
+		const tool = createApplyPatchTool();
+		const result = {
+			content: [{ type: "text" as const, text: "Applying patch (1/2)..." }],
+			details: {
+				progress: { applied: 1, failed: 0, total: 2 },
+				preview: {
+					files: [
+						{
+							filePath: "src/foo.ts",
+							operation: "update" as const,
+							diff: "-1 alpha old\n+1 alpha new",
+							added: 1,
+							removed: 1,
+						},
+					],
+					added: 1,
+					removed: 1,
+				},
+			},
+		};
+
+		// when
+		const component = tool.renderResult?.(
+			result,
+			{ expanded: false, isPartial: true },
+			markerTheme as never,
+			{ cwd: "/workspace/project", toolCallId: "result-progress", args: { input: "" } } as never,
+		);
+		const rendered = component?.render(200).join("\n") ?? "";
+
+		// then
+		expect(rendered).toContain("<bg:toolPendingBg>");
+		expect(rendered).toContain("<bold>Applying patch (1/2)</bold>");
+		expect(rendered).toContain("• Edited src/foo.ts (+1 -1)");
+		expect(rendered).toContain("<fg:toolDiffRemoved>alpha <inverse>old</inverse></fg:toolDiffRemoved>");
+		expect(rendered).toContain("<fg:toolDiffAdded>alpha <inverse>new</inverse></fg:toolDiffAdded>");
+	});
+
 	it("#given multi-file preview #when rendering result collapsed #then shows grouped summary", () => {
 		// given
 		const tool = createApplyPatchTool();

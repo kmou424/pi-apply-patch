@@ -72,8 +72,17 @@ type ApplyPatchPreview = {
 
 type ApplyPatchToolDetails = {
 	preview?: ApplyPatchPreview;
+	progress?: ApplyPatchProgress;
 	result?: ApplyPatchResult;
 };
+
+type ApplyPatchProgress = {
+	applied: number;
+	failed: number;
+	total: number;
+};
+
+type ApplyPatchProgressCallback = (progress: ApplyPatchProgress) => Promise<void> | void;
 
 export type ApplyPatchFailure = {
 	filePath: string;
@@ -1047,7 +1056,11 @@ async function applySingleHunk(
 	return { summary: `update: ${hunk.filePath}`, appliedFile: hunk.filePath, fuzz: chunkResult.fuzz };
 }
 
-export async function applyPatchDetailed(cwd: string, patchText: string): Promise<ApplyPatchResult> {
+export async function applyPatchDetailed(
+	cwd: string,
+	patchText: string,
+	onProgress?: ApplyPatchProgressCallback,
+): Promise<ApplyPatchResult> {
 	const hunks = parsePatch(patchText);
 	if (hunks.length === 0) {
 		const normalized = normalizePatchText(patchText).trim();
@@ -1072,6 +1085,7 @@ export async function applyPatchDetailed(cwd: string, patchText: string): Promis
 			const message = error instanceof Error ? error.message : String(error);
 			failures.push({ filePath: hunk.filePath, operation: hunk.type, message });
 		}
+		await onProgress?.({ applied: appliedFiles.length, failed: failures.length, total: hunks.length });
 	}
 
 	const result: ApplyPatchResult = {
@@ -1134,22 +1148,37 @@ export async function applyPatch(cwd: string, patchText: string): Promise<string
 async function createPendingPatchUpdate(
 	cwd: string,
 	patchText: string,
+	progress?: ApplyPatchProgress,
+	previewOverride?: ApplyPatchPreview,
 ): Promise<{ text: string; details: ApplyPatchToolDetails | undefined }> {
+	const title = progress
+		? `Applying patch (${progress.applied + progress.failed}/${progress.total})...`
+		: "Applying patch...";
+	if (previewOverride) {
+		return {
+			text: `${title}\n${formatPatchPreview(previewOverride)}`,
+			details: { preview: previewOverride, progress },
+		};
+	}
+
 	try {
 		const hunks = parsePatch(patchText);
 		if (hunks.length === 0) {
-			return { text: "Applying patch...", details: undefined };
+			return { text: title, details: progress ? { progress } : undefined };
 		}
 
 		const preview = await createPatchPreview(cwd, hunks);
 		if (preview.files.some((file) => file.diff.trim().length > 0)) {
-			return { text: `Applying patch...\n${formatPatchPreview(preview)}`, details: { preview } };
+			return { text: `${title}\n${formatPatchPreview(preview)}`, details: { preview, progress } };
 		}
 	} catch {
-		return { text: formatPendingPatchPaths(patchText), details: undefined };
+		return {
+			text: progress ? title : formatPendingPatchPaths(patchText),
+			details: progress ? { progress } : undefined,
+		};
 	}
 
-	return { text: formatPendingPatchPaths(patchText), details: undefined };
+	return { text: progress ? title : formatPendingPatchPaths(patchText), details: progress ? { progress } : undefined };
 }
 
 function hasEditTools(toolNames: string[]): boolean {
@@ -1229,13 +1258,27 @@ export function createApplyPatchTool(): ApplyPatchToolDefinition {
 				throw new Error("input is required");
 			}
 
-			const pendingUpdate = await createPendingPatchUpdate(ctx.cwd, normalizedParams.input);
+			let totalOperations = 0;
+			try {
+				totalOperations = parsePatch(normalizedParams.input).length;
+			} catch {
+				// createPendingPatchUpdate keeps incomplete or invalid patch text renderable.
+			}
+			const initialProgress = totalOperations > 0 ? { applied: 0, failed: 0, total: totalOperations } : undefined;
+			const pendingUpdate = await createPendingPatchUpdate(ctx.cwd, normalizedParams.input, initialProgress);
 			onUpdate?.({
 				content: [{ type: "text", text: pendingUpdate.text }],
 				details: pendingUpdate.details,
 			});
 
-			const result = await applyPatchDetailed(ctx.cwd, normalizedParams.input);
+			const preview = pendingUpdate.details?.preview;
+			const result = await applyPatchDetailed(ctx.cwd, normalizedParams.input, async (progress) => {
+				const progressUpdate = await createPendingPatchUpdate(ctx.cwd, normalizedParams.input, progress, preview);
+				onUpdate?.({
+					content: [{ type: "text", text: progressUpdate.text }],
+					details: progressUpdate.details,
+				});
+			});
 			if (result.failures.length > 0) {
 				const failed = result.recoveryInstructions.mustReadFiles.join(", ");
 				const mustReadText = failed.includes(",") ? failed.split(", ").join(" and ") : failed;
@@ -1282,8 +1325,12 @@ export function createApplyPatchTool(): ApplyPatchToolDefinition {
 			const preview = result.details?.preview;
 			if (preview) {
 				const bgName = options.isPartial ? "toolPendingBg" : "toolSuccessBg";
+				const progress = result.details?.progress;
+				const title = progress
+					? `Applying patch (${progress.applied + progress.failed}/${progress.total})`
+					: "Applying patch";
 				const box = new Box(1, 1, (text: string) => theme.bg(bgName, text));
-				box.addChild(new Text(theme.fg("toolTitle", theme.bold("Applying patch")), 0, 0));
+				box.addChild(new Text(theme.fg("toolTitle", theme.bold(title)), 0, 0));
 				box.addChild(new Spacer(1));
 				const expanded = options.isPartial ? true : (options.expanded ?? true);
 				box.addChild(new Text(renderPatchPreview(preview, context.cwd, theme, expanded), 0, 0));
