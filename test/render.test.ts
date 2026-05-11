@@ -17,6 +17,13 @@ const identityTheme = {
 	inverse: (text: string) => text,
 };
 
+const markerTheme = {
+	fg: (name: string, text: string) => `<fg:${name}>${text}</fg:${name}>`,
+	bg: (name: string, text: string) => `<bg:${name}>${text}</bg:${name}>`,
+	bold: (text: string) => `<bold>${text}</bold>`,
+	inverse: (text: string) => `<inverse>${text}</inverse>`,
+};
+
 describe("render helpers", () => {
 	it("#given long diff #when truncating #then keeps head and tail", () => {
 		// given
@@ -219,6 +226,45 @@ describe("render helpers", () => {
 		// then
 		expect(rendered).toContain("• Edited src/foo.ts (+1 -1)");
 		expect(rendered).not.toContain("+1 new");
+	});
+
+	it("#given expanded preview #when rendering result #then uses OpenCode-like highlighted diff rows", () => {
+		// given
+		const tool = createApplyPatchTool();
+		const result = {
+			content: [{ type: "text" as const, text: "Applying patch" }],
+			details: {
+				preview: {
+					files: [
+						{
+							filePath: "src/foo.ts",
+							operation: "update" as const,
+							diff: "-1 alpha old\n+1 alpha new\n 2 same",
+							added: 1,
+							removed: 1,
+						},
+					],
+					added: 1,
+					removed: 1,
+				},
+			},
+		};
+
+		// when
+		const component = tool.renderResult?.(
+			result,
+			{ expanded: true, isPartial: false },
+			markerTheme as never,
+			{ cwd: "/workspace/project", toolCallId: "result-colored", args: { input: "" } } as never,
+		);
+		const rendered = component?.render(200).join("\n") ?? "";
+
+		// then
+		expect(rendered).toContain("<bg:toolErrorBg><fg:toolDiffRemoved>-</fg:toolDiffRemoved><fg:muted>1</fg:muted>");
+		expect(rendered).toContain("<fg:toolDiffRemoved>alpha <inverse>old</inverse></fg:toolDiffRemoved>");
+		expect(rendered).toContain("<bg:toolSuccessBg><fg:toolDiffAdded>+</fg:toolDiffAdded><fg:muted>1</fg:muted>");
+		expect(rendered).toContain("<fg:toolDiffAdded>alpha <inverse>new</inverse></fg:toolDiffAdded>");
+		expect(rendered).toContain("<fg:toolDiffContext> </fg:toolDiffContext><fg:muted>2</fg:muted> same");
 	});
 
 	it("#given multi-file preview #when rendering result collapsed #then shows grouped summary", () => {
