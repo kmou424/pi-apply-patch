@@ -187,6 +187,34 @@ describe("pi-apply-patch", () => {
 		expect(await readFile(path.join(directory, "second.txt"), "utf-8")).toBe("TWO\n");
 	});
 
+	it("#given progress callback throws #when applying detailed patch #then still applies all operations", async () => {
+		// given
+		const directory = await createTempDirectory();
+		await writeFile(path.join(directory, "first.txt"), "one\n", "utf-8");
+		await writeFile(path.join(directory, "second.txt"), "two\n", "utf-8");
+		const patch = `*** Begin Patch
+*** Update File: first.txt
+@@
+-one
++ONE
+*** Update File: second.txt
+@@
+-two
++TWO
+*** End Patch`;
+
+		// when
+		const result = await applyPatchDetailed(directory, patch, () => {
+			throw new Error("render failed");
+		});
+
+		// then
+		expect(result.failures).toEqual([]);
+		expect(result.appliedFiles).toEqual(["first.txt", "second.txt"]);
+		expect(await readFile(path.join(directory, "first.txt"), "utf-8")).toBe("ONE\n");
+		expect(await readFile(path.join(directory, "second.txt"), "utf-8")).toBe("TWO\n");
+	});
+
 	it("#given add patch overwriting existing file #when started #then pending diff shows removed content", async () => {
 		// given
 		const directory = await createTempDirectory();

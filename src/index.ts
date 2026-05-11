@@ -84,6 +84,17 @@ type ApplyPatchProgress = {
 
 type ApplyPatchProgressCallback = (progress: ApplyPatchProgress) => Promise<void> | void;
 
+async function notifyApplyPatchProgress(
+	onProgress: ApplyPatchProgressCallback | undefined,
+	progress: ApplyPatchProgress,
+): Promise<void> {
+	try {
+		await onProgress?.(progress);
+	} catch {
+		// Rendering progress must not affect patch application or recovery details.
+	}
+}
+
 export type ApplyPatchFailure = {
 	filePath: string;
 	operation: ApplyPatchOperation;
@@ -1085,7 +1096,11 @@ export async function applyPatchDetailed(
 			const message = error instanceof Error ? error.message : String(error);
 			failures.push({ filePath: hunk.filePath, operation: hunk.type, message });
 		}
-		await onProgress?.({ applied: appliedFiles.length, failed: failures.length, total: hunks.length });
+		await notifyApplyPatchProgress(onProgress, {
+			applied: appliedFiles.length,
+			failed: failures.length,
+			total: hunks.length,
+		});
 	}
 
 	const result: ApplyPatchResult = {
