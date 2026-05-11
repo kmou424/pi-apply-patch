@@ -1,7 +1,7 @@
 {
 	"name": "pi-apply-patch",
 	"version": "0.1.0",
-	"description": "Codex-style apply_patch tool extension for the pi coding agent. Registers a freeform grammar patch tool for OpenAI GPT models and applies patches safely inside the workspace.",
+	"description": "Codex-style apply_patch tool extension for the pi coding agent. Registers a freeform grammar patch tool for OpenAI GPT models and applies patches with Node path resolution.",
 	"type": "module",
 	"license": "MIT",
 	"homepage": "https://github.com/code-yeongyu/pi-apply-patch",

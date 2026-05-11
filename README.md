@@ -4,7 +4,7 @@ Codex-style `apply_patch` tool extension for the [pi coding agent](https://githu
 
 ## Behavior
 
-The extension registers one LLM-callable tool: `apply_patch`. The tool accepts Codex patch envelopes and applies file additions, updates, deletions, and moves inside the current workspace.
+The extension registers one LLM-callable tool: `apply_patch`. The tool accepts Codex patch envelopes and applies file additions, updates, deletions, and moves after resolving file paths against the current workspace.
 
 | Case | Result |
 |------|--------|
@@ -12,7 +12,7 @@ The extension registers one LLM-callable tool: `apply_patch`. The tool accepts C
 | Non-GPT model active | restores the original `write` and `edit` toolset |
 | Raw freeform patch input | accepted and applied |
 | JSON `{ "input": "..." }` patch input | accepted and applied |
-| Absolute or parent-escaping path | rejected |
+| Absolute or parent-escaping path | accepted and resolved by Node path semantics |
 
 ## Tool
 

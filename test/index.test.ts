@@ -357,22 +357,24 @@ EOF`;
 		expect(await readFile(path.join(directory, "new.txt"), "utf-8")).toBe("no trailing newline");
 	});
 
-	it("#given absolute path outside workspace #when executed #then rejects patch", async () => {
+	it("#given absolute path outside workspace #when executed #then applies patch", async () => {
 		// given
 		const directory = await createTempDirectory();
 		const outsidePath = path.join(path.dirname(directory), "outside-apply-patch.txt");
+		tempDirectories.push(outsidePath);
 		const patch = `*** Begin Patch
 *** Add File: ${outsidePath}
 +outside
 *** End Patch`;
 
-		// when / then
-		await expect(applyPatch(directory, patch)).rejects.toThrow(
-			"File references must stay within the current workspace.",
-		);
+		// when
+		await applyPatch(directory, patch);
+
+		// then
+		expect(await readFile(outsidePath, "utf-8")).toBe("outside\n");
 	});
 
-	it("#given symlink escaping workspace #when executed #then rejects patch", async () => {
+	it("#given symlink escaping workspace #when executed #then applies patch", async () => {
 		// given
 		const directory = await createTempDirectory();
 		const outsideDirectory = await createTempDirectory();
@@ -382,10 +384,11 @@ EOF`;
 +outside
 *** End Patch`;
 
-		// when / then
-		await expect(applyPatch(directory, patch)).rejects.toThrow(
-			"File references must stay within the current workspace.",
-		);
+		// when
+		await applyPatch(directory, patch);
+
+		// then
+		expect(await readFile(path.join(outsideDirectory, "outside.txt"), "utf-8")).toBe("outside\n");
 	});
 
 	it("#given invalid codex hunk header #when executed #then reports parser diagnostic", async () => {

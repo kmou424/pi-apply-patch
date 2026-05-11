@@ -1,4 +1,4 @@
-import { mkdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
@@ -566,7 +566,7 @@ function formatPendingPatchPaths(patchText: string): string {
 async function createPatchPreview(cwd: string, hunks: ParsedPatch[]): Promise<ApplyPatchPreview> {
 	const files: ApplyPatchPreviewFile[] = [];
 	for (const hunk of hunks) {
-		const absolutePath = await resolveWorkspacePath(cwd, hunk.filePath);
+		const absolutePath = resolvePatchPath(cwd, hunk.filePath);
 		if (hunk.type === "add") {
 			const oldContent = await readExistingFileForPreview(absolutePath);
 			const diff = createPatchDiff(oldContent, hunk.content);
@@ -585,7 +585,7 @@ async function createPatchPreview(cwd: string, hunks: ParsedPatch[]): Promise<Ap
 		const newContent =
 			hunk.chunks.length === 0 ? oldContent : replaceChunks(oldContent, hunk.filePath, hunk.chunks).content;
 		if (hunk.movePath) {
-			await resolveWorkspacePath(cwd, hunk.movePath);
+			resolvePatchPath(cwd, hunk.movePath);
 		}
 		const diff = createPatchDiff(oldContent, newContent);
 		files.push({ filePath: hunk.filePath, movePath: hunk.movePath, operation: "update", ...diff });
@@ -811,17 +811,15 @@ async function applySingleHunk(
 	cwd: string,
 	hunk: ParsedPatch,
 ): Promise<{ summary: string; appliedFile: string; fuzz: number }> {
-	const absolutePath = await resolveWorkspacePath(cwd, hunk.filePath);
+	const absolutePath = resolvePatchPath(cwd, hunk.filePath);
 	if (hunk.type === "add") {
 		await mkdir(path.dirname(absolutePath), { recursive: true });
-		await assertWorkspacePath(cwd, absolutePath);
 		await writeFileAtomic(absolutePath, hunk.content);
 		return { summary: `add: ${hunk.filePath}`, appliedFile: hunk.filePath, fuzz: 0 };
 	}
 
 	if (hunk.type === "delete") {
 		await stat(absolutePath);
-		await assertWorkspacePath(cwd, absolutePath);
 		await rm(absolutePath);
 		return { summary: `delete: ${hunk.filePath}`, appliedFile: hunk.filePath, fuzz: 0 };
 	}
@@ -834,9 +832,8 @@ async function applySingleHunk(
 	const nextContent = chunkResult.content;
 
 	if (hunk.movePath) {
-		const absoluteMovePath = await resolveWorkspacePath(cwd, hunk.movePath);
+		const absoluteMovePath = resolvePatchPath(cwd, hunk.movePath);
 		await mkdir(path.dirname(absoluteMovePath), { recursive: true });
-		await assertWorkspacePath(cwd, absoluteMovePath);
 		await writeFileAtomic(absoluteMovePath, nextContent);
 		if (absoluteMovePath !== absolutePath) {
 			await rm(absolutePath);
@@ -848,7 +845,6 @@ async function applySingleHunk(
 		};
 	}
 
-	await assertWorkspacePath(cwd, absolutePath);
 	await writeFileAtomic(absolutePath, nextContent);
 	return { summary: `update: ${hunk.filePath}`, appliedFile: hunk.filePath, fuzz: chunkResult.fuzz };
 }
@@ -982,47 +978,8 @@ function restoreEditToolsFromBaseline(currentToolNames: string[], baselineToolNa
 	return [...new Set(restoredToolNames)];
 }
 
-function isInsideWorkspace(absoluteCwd: string, absolutePath: string): boolean {
-	const relativePath = path.relative(absoluteCwd, absolutePath);
-	return (
-		relativePath === "" ||
-		(!relativePath.startsWith(`..${path.sep}`) && relativePath !== ".." && !path.isAbsolute(relativePath))
-	);
-}
-
-async function assertWorkspacePath(cwd: string, absolutePath: string): Promise<void> {
-	const absoluteCwd = await realpath(cwd);
-	let pathToCheck = absolutePath;
-	while (true) {
-		try {
-			const realPath = await realpath(pathToCheck);
-			if (!isInsideWorkspace(absoluteCwd, realPath)) {
-				throw new Error("File references must stay within the current workspace.");
-			}
-			return;
-		} catch (error) {
-			if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-				const parent = path.dirname(pathToCheck);
-				if (parent === pathToCheck) {
-					throw error;
-				}
-				pathToCheck = parent;
-				continue;
-			}
-			throw error;
-		}
-	}
-}
-
-async function resolveWorkspacePath(cwd: string, filePath: string): Promise<string> {
-	const absoluteCwd = path.resolve(cwd);
-	const absolutePath = path.resolve(absoluteCwd, filePath);
-	if (!isInsideWorkspace(absoluteCwd, absolutePath)) {
-		throw new Error("File references must stay within the current workspace.");
-	}
-	await assertWorkspacePath(cwd, absolutePath);
-
-	return absolutePath;
+function resolvePatchPath(cwd: string, filePath: string): string {
+	return path.resolve(cwd, filePath);
 }
 
 function syncToolset(
