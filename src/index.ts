@@ -209,6 +209,65 @@ const PATCH_PREVIEW_HEAD_LINES = 8;
 const PATCH_PREVIEW_TAIL_LINES = 8;
 const applyPatchRenderStates = new Map<string, ApplyPatchRenderState>();
 
+function isChangedPreviewLine(line: string): boolean {
+	return /^[+-]\s*\d+\s/.test(line);
+}
+
+function countWindowLines(lines: string[], start: number, end: number): number {
+	return end - start + (start > 0 ? 1 : 0) + (end < lines.length ? 1 : 0);
+}
+
+function formatPreviewWindow(lines: string[], start: number, end: number): string {
+	const previewLines = lines.slice(start, end);
+	if (start > 0) {
+		previewLines.unshift("…");
+	}
+	if (end < lines.length) {
+		previewLines.push("…");
+	}
+	return previewLines.join("\n");
+}
+
+function createChangedHunkPreview(lines: string[]): string | undefined {
+	const firstChangedLine = lines.findIndex(isChangedPreviewLine);
+	if (firstChangedLine === -1) {
+		return undefined;
+	}
+
+	let start = firstChangedLine;
+	let end = firstChangedLine + 1;
+	while (end < lines.length) {
+		const line = lines[end];
+		if (line === undefined || !isChangedPreviewLine(line)) {
+			break;
+		}
+		end++;
+	}
+
+	const changedHunkEnd = end;
+	while (end > start && countWindowLines(lines, start, end) > PATCH_PREVIEW_MAX_LINES) {
+		end--;
+	}
+
+	while (countWindowLines(lines, start, end) < PATCH_PREVIEW_MAX_LINES) {
+		const canAddBefore = start > 0;
+		const canAddAfter = end < lines.length;
+		if (!canAddBefore && !canAddAfter) {
+			break;
+		}
+
+		const beforeContextLines = firstChangedLine - start;
+		const afterContextLines = end - changedHunkEnd;
+		if (canAddBefore && (!canAddAfter || beforeContextLines <= afterContextLines)) {
+			start--;
+		} else {
+			end++;
+		}
+	}
+
+	return formatPreviewWindow(lines, start, end);
+}
+
 function countLines(text: string): number {
 	if (text.length === 0) {
 		return 0;
@@ -228,9 +287,11 @@ export function truncatePreview(text: string): string {
 	}
 
 	const lines = text.split("\n");
-	const head = lines.slice(0, PATCH_PREVIEW_HEAD_LINES);
-	const tail = lines.slice(-PATCH_PREVIEW_TAIL_LINES);
-	let preview = [...head, "…", ...tail].join("\n");
+	const changedHunkPreview = createChangedHunkPreview(lines);
+	const previewText =
+		changedHunkPreview ??
+		[...lines.slice(0, PATCH_PREVIEW_HEAD_LINES), "…", ...lines.slice(-PATCH_PREVIEW_TAIL_LINES)].join("\n");
+	let preview = previewText;
 	if (preview.length > PATCH_PREVIEW_MAX_CHARS) {
 		preview = `${preview.slice(0, PATCH_PREVIEW_MAX_CHARS).trimEnd()}\n…`;
 	}

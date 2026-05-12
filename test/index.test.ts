@@ -13,6 +13,7 @@ import {
 	type FreeformToolFormat,
 	isOpenAIGptModel,
 	registerApplyPatchExtension,
+	truncatePreview,
 } from "../src/index.js";
 
 const tempDirectories: string[] = [];
@@ -145,6 +146,59 @@ describe("pi-apply-patch", () => {
 		expect(rendered).toContain("sample.txt (+1 -1)");
 		expect(rendered).toContain("+1 after");
 		expect(rendered).not.toContain("Index:");
+	});
+
+	it("#given large patch preview #when truncating #then keeps changed hunk visible", async () => {
+		// given
+		const directory = await createTempDirectory();
+		const original = `${Array.from({ length: 40 }, (_, index) => `line-${index + 1}`).join("\n")}\n`;
+		await writeFile(path.join(directory, "large.txt"), original, "utf-8");
+		const patch = `*** Begin Patch
+*** Update File: large.txt
+@@
+-line-30
++line-30 updated
+*** End Patch`;
+		const updates: string[] = [];
+
+		// when
+		await createApplyPatchTool().execute(
+			"apply-patch-large-preview-test",
+			{ input: patch },
+			undefined,
+			(update) => {
+				const text = update.content.find((block) => block.type === "text")?.text;
+				if (text) {
+					updates.push(text);
+				}
+			},
+			{ cwd: directory } as never,
+		);
+
+		// then
+		expect(updates[0]).toContain("-30 line-30");
+		expect(updates[0]).toContain("+30 line-30 updated");
+		expect(updates[0]).not.toContain(" 1 line-1");
+		expect(await readFile(path.join(directory, "large.txt"), "utf-8")).toContain("line-30 updated");
+	});
+
+	it("#given large generated diff #when truncating #then centers preview around first changed line", () => {
+		// given
+		const diff = [
+			...Array.from({ length: 29 }, (_, index) => ` ${String(index + 1).padStart(2, " ")} line-${index + 1}`),
+			"-30 line-30",
+			"+30 line-30 updated",
+			...Array.from({ length: 10 }, (_, index) => ` ${String(index + 31).padStart(2, " ")} line-${index + 31}`),
+		].join("\n");
+
+		// when
+		const preview = truncatePreview(diff);
+
+		// then
+		expect(preview).toContain("-30 line-30");
+		expect(preview).toContain("+30 line-30 updated");
+		expect(preview).not.toContain(" 1 line-1");
+		expect(preview).not.toContain(" 40 line-40");
 	});
 
 	it("#given multi file apply_patch tool execution #when applying #then emits realtime progress updates", async () => {

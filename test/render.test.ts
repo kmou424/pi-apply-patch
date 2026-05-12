@@ -25,7 +25,7 @@ const markerTheme = {
 };
 
 describe("render helpers", () => {
-	it("#given long diff #when truncating #then keeps head and tail", () => {
+	it("#given plain text diff #when truncating #then falls back to head and tail", () => {
 		// given
 		const lines = Array.from({ length: PATCH_PREVIEW_MAX_LINES + 12 }, (_, index) => `line-${index + 1}`);
 		const diff = lines.join("\n");
