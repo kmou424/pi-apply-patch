@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
@@ -12,6 +12,7 @@ import {
 import { Box, Container, Spacer, Text } from "@mariozechner/pi-tui";
 import * as Diff from "diff";
 import { Type } from "typebox";
+import { writeFileAtomic } from "./write-file-atomic.js";
 
 const APPLY_PATCH_PARAMS = Type.Object({
 	input: Type.String({
@@ -133,6 +134,20 @@ export class ApplyPatchError extends Error {
 	}
 }
 
+export class PatchParseError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "PatchParseError";
+	}
+}
+
+export class PatchApplicationError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "PatchApplicationError";
+	}
+}
+
 type ApplyPatchRenderState = {
 	cwd: string;
 	patchText: string;
@@ -160,46 +175,8 @@ type ApplyPatchTheme = {
 	inverse: (text: string) => string;
 };
 
-type AtomicWriteOperations = {
-	writeFile: (filePath: string, content: string, encoding: "utf-8") => Promise<void>;
-	rename: (fromPath: string, toPath: string) => Promise<void>;
-	unlink: (filePath: string) => Promise<void>;
-};
-
-const ATOMIC_WRITE_OPERATIONS: AtomicWriteOperations = {
-	writeFile,
-	rename,
-	unlink,
-};
-
 function hasErrorCode(error: unknown, code: string): boolean {
 	return Boolean(error && typeof error === "object" && "code" in error && error.code === code);
-}
-
-async function writeFileAtomic(
-	absPath: string,
-	content: string,
-	operations: AtomicWriteOperations = ATOMIC_WRITE_OPERATIONS,
-): Promise<void> {
-	const tempPath = `${absPath}.tmp.${process.pid}.${Math.random().toString(16).slice(2)}`;
-	await operations.writeFile(tempPath, content, "utf-8");
-	try {
-		await operations.rename(tempPath, absPath);
-	} catch (error) {
-		if (!hasErrorCode(error, "EEXIST")) {
-			throw error;
-		}
-		await operations.unlink(absPath);
-		await operations.rename(tempPath, absPath);
-	}
-}
-
-export async function __testWriteFileAtomic(
-	absPath: string,
-	content: string,
-	operations: AtomicWriteOperations,
-): Promise<void> {
-	await writeFileAtomic(absPath, content, operations);
 }
 
 const GPT_APPLY_PATCH_PROVIDERS = new Set(["openai", "azure-openai-responses", "github-copilot"]);
@@ -342,9 +319,6 @@ eof_line: "*** End of File" LF
 %import common.LF
 `;
 
-export const CODEX_APPLY_PATCH_DESCRIPTION =
-	'Use the `apply_patch` tool to edit files.\nYour patch language is a stripped‑down, file‑oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high‑level envelope:\n\n*** Begin Patch\n[ one or more file sections ]\n*** End Patch\n\nWithin that envelope, you get a sequence of file operations.\nYou MUST include a header to specify the action you are taking.\nEach operation starts with one of three headers:\n\n*** Add File: <path> - create a new file. Every following line is a + line (the initial contents).\n*** Delete File: <path> - remove an existing file. Nothing follows.\n*** Update File: <path> - patch an existing file in place (optionally with a rename).\n\nMay be immediately followed by *** Move to: <new path> if you want to rename the file.\nThen one or more “hunks”, each introduced by @@ (optionally followed by a hunk header).\nWithin a hunk each line starts with:\n\nFor instructions on [context_before] and [context_after]:\n- By default, show 3 lines of code immediately above and 3 lines immediately below each change. If a change is within 3 lines of a previous change, do NOT duplicate the first change’s [context_after] lines in the second change’s [context_before] lines.\n- If 3 lines of context is insufficient to uniquely identify the snippet of code within the file, use the @@ operator to indicate the class or function to which the snippet belongs. For instance, we might have:\n@@ class BaseClass\n[3 lines of pre-context]\n- [old_code]\n+ [new_code]\n[3 lines of post-context]\n\n- If a code block is repeated so many times in a class or function such that even a single `@@` statement and 3 lines of context cannot uniquely identify the snippet of code, you can use multiple `@@` statements to jump to the right context. For instance:\n\n@@ class BaseClass\n@@ \t def method():\n[3 lines of pre-context]\n- [old_code]\n+ [new_code]\n[3 lines of post-context]\n\nThe full grammar definition is below:\nPatch := Begin { FileOp } End\nBegin := "*** Begin Patch" NEWLINE\nEnd := "*** End Patch" NEWLINE\nFileOp := AddFile | DeleteFile | UpdateFile\nAddFile := "*** Add File: " path NEWLINE { "+" line NEWLINE }\nDeleteFile := "*** Delete File: " path NEWLINE\nUpdateFile := "*** Update File: " path NEWLINE [ MoveTo ] { Hunk }\nMoveTo := "*** Move to: " newPath NEWLINE\nHunk := "@@" [ header ] NEWLINE { HunkLine } [ "*** End of File" NEWLINE ]\nHunkLine := (" " | "-" | "+") text NEWLINE\n\nA full patch can combine several operations:\n\n*** Begin Patch\n*** Add File: hello.txt\n+Hello world\n*** Update File: src/app.py\n*** Move to: src/main.py\n@@ def greet():\n-print("Hi")\n+print("Hello, world!")\n*** Delete File: obsolete.txt\n*** End Patch\n\nIt is important to remember:\n\n- You must include a header with your intended action (Add/Delete/Update)\n- You must prefix new lines with `+` even when creating a new file\n- File references can only be relative, NEVER ABSOLUTE.\n';
-
 export function isOpenAIGptModel(model: Pick<Model<string>, "provider" | "id"> | undefined): boolean {
 	return model !== undefined && GPT_APPLY_PATCH_PROVIDERS.has(model.provider) && model.id.startsWith("gpt-");
 }
@@ -395,24 +369,40 @@ function seekSequence(
 		}
 		return true;
 	};
+	const matchesPrepared = (index: number, preparedLines: string[], preparedPattern: string[]): boolean => {
+		for (let patternIndex = 0; patternIndex < preparedPattern.length; patternIndex++) {
+			const line = preparedLines[index + patternIndex];
+			const expected = preparedPattern[patternIndex];
+			if (line === undefined || expected === undefined || line !== expected) {
+				return false;
+			}
+		}
+		return true;
+	};
 
 	for (let index = searchStart; index <= lastStart; index++) {
 		if (matches(index, (line, expected) => line === expected)) {
 			return { index, fuzz: 0 };
 		}
 	}
+	const linesTrimEnd = lines.map((line) => line.trimEnd());
+	const patternTrimEnd = pattern.map((line) => line.trimEnd());
 	for (let index = searchStart; index <= lastStart; index++) {
-		if (matches(index, (line, expected) => line.trimEnd() === expected.trimEnd())) {
+		if (matchesPrepared(index, linesTrimEnd, patternTrimEnd)) {
 			return { index, fuzz: 1 };
 		}
 	}
+	const linesTrim = lines.map((line) => line.trim());
+	const patternTrim = pattern.map((line) => line.trim());
 	for (let index = searchStart; index <= lastStart; index++) {
-		if (matches(index, (line, expected) => line.trim() === expected.trim())) {
+		if (matchesPrepared(index, linesTrim, patternTrim)) {
 			return { index, fuzz: 100 };
 		}
 	}
+	const linesNormalized = lines.map(normalizeSeekLine);
+	const patternNormalized = pattern.map(normalizeSeekLine);
 	for (let index = searchStart; index <= lastStart; index++) {
-		if (matches(index, (line, expected) => normalizeSeekLine(line) === normalizeSeekLine(expected))) {
+		if (matchesPrepared(index, linesNormalized, patternNormalized)) {
 			return { index, fuzz: 10000 };
 		}
 	}
@@ -471,7 +461,7 @@ async function readExistingFileForPreview(absolutePath: string): Promise<string>
 	try {
 		return await readFile(absolutePath, "utf-8");
 	} catch (error) {
-		if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+		if (hasErrorCode(error, "ENOENT")) {
 			return "";
 		}
 		throw error;
@@ -480,6 +470,14 @@ async function readExistingFileForPreview(absolutePath: string): Promise<string>
 
 function formatLineCountSummary(added: number, removed: number): string {
 	return `(+${added} -${removed})`;
+}
+
+function formatPatchFileSummary(file: ApplyPatchPreviewFile, cwd: string): string {
+	return `${formatPatchFilePath(file, cwd)} ${formatLineCountSummary(file.added, file.removed)}`;
+}
+
+function formatPatchFileHeader(file: ApplyPatchPreviewFile, cwd: string): string {
+	return `• ${formatPatchOperation(file.operation)} ${formatPatchFileSummary(file, cwd)}`;
 }
 
 export function displayPath(filePath: string, cwd: string): string {
@@ -526,9 +524,7 @@ export function formatPatchPreview(
 	if (preview.files.length === 1) {
 		const file = preview.files[0];
 		if (file) {
-			lines.push(
-				`• ${formatPatchOperation(file.operation)} ${formatPatchFilePath(file, cwd)} ${formatLineCountSummary(file.added, file.removed)}`,
-			);
+			lines.push(formatPatchFileHeader(file, cwd));
 			if (expanded && file.diff) {
 				lines.push(
 					...truncatePreview(file.diff)
@@ -540,10 +536,10 @@ export function formatPatchPreview(
 		return lines.join("\n");
 	}
 
-	const noun = preview.files.length === 1 ? "file" : "files";
+	const noun = "files";
 	lines.push(`• Edited ${preview.files.length} ${noun} ${formatLineCountSummary(preview.added, preview.removed)}`);
 	for (const file of preview.files) {
-		lines.push(`  └ ${formatPatchFilePath(file, cwd)} ${formatLineCountSummary(file.added, file.removed)}`);
+		lines.push(`  └ ${formatPatchFileSummary(file, cwd)}`);
 		if (expanded && file.diff) {
 			lines.push(
 				...truncatePreview(file.diff)
@@ -785,16 +781,14 @@ function renderPatchPreview(
 	if (expanded) {
 		try {
 			const renderFile = (file: ApplyPatchPreviewFile, headerPrefix: string): string => {
-				const header = `• ${formatPatchOperation(file.operation)} ${formatPatchFilePath(file, cwd)} ${formatLineCountSummary(file.added, file.removed)}`;
+				const header = formatPatchFileHeader(file, cwd);
 				if (!file.diff) {
-					return headerPrefix.length > 0
-						? `${headerPrefix}${formatPatchFilePath(file, cwd)} ${formatLineCountSummary(file.added, file.removed)}`
-						: header;
+					return headerPrefix.length > 0 ? `${headerPrefix}${formatPatchFileSummary(file, cwd)}` : header;
 				}
 				const previewDiff = truncatePreview(file.diff);
 				const renderedDiff = renderOpenCodeLikeDiff(previewDiff, file.movePath ?? file.filePath, theme);
 				if (headerPrefix.length > 0) {
-					const nestedHeader = `${headerPrefix}${formatPatchFilePath(file, cwd)} ${formatLineCountSummary(file.added, file.removed)}`;
+					const nestedHeader = `${headerPrefix}${formatPatchFileSummary(file, cwd)}`;
 					return `${nestedHeader}\n${renderedDiff
 						.split("\n")
 						.map((line) => `    ${line}`)
@@ -808,7 +802,7 @@ function renderPatchPreview(
 				return file ? renderFile(file, "") : "";
 			}
 
-			const noun = preview.files.length === 1 ? "file" : "files";
+			const noun = "files";
 			const renderedFiles = preview.files.map((file) => renderFile(file, "  └ ")).join("\n");
 			if (renderedFiles.length > 0) {
 				return `• Edited ${preview.files.length} ${noun} ${formatLineCountSummary(preview.added, preview.removed)}\n${renderedFiles}`;
@@ -850,7 +844,7 @@ function formatPendingPatchPaths(patchText: string): string {
 async function createPatchPreview(cwd: string, hunks: ParsedPatch[]): Promise<ApplyPatchPreview> {
 	const files: ApplyPatchPreviewFile[] = [];
 	for (const hunk of hunks) {
-		const absolutePath = resolvePatchPath(cwd, hunk.filePath);
+		const absolutePath = await resolvePatchPath(cwd, hunk.filePath);
 		if (hunk.type === "add") {
 			const oldContent = await readExistingFileForPreview(absolutePath);
 			const diff = createPatchDiff(oldContent, hunk.content);
@@ -869,7 +863,7 @@ async function createPatchPreview(cwd: string, hunks: ParsedPatch[]): Promise<Ap
 		const newContent =
 			hunk.chunks.length === 0 ? oldContent : replaceChunks(oldContent, hunk.filePath, hunk.chunks).content;
 		if (hunk.movePath) {
-			resolvePatchPath(cwd, hunk.movePath);
+			await resolvePatchPath(cwd, hunk.movePath);
 		}
 		const diff = createPatchDiff(oldContent, newContent);
 		files.push({ filePath: hunk.filePath, movePath: hunk.movePath, operation: "update", ...diff });
@@ -890,7 +884,7 @@ function parsePatch(patchText: string): ParsedPatch[] {
 	const endIndex = lastLine?.trim() === "*** End Patch" ? lines.length - 1 : -1;
 
 	if (beginIndex === -1 || endIndex === -1 || endIndex < beginIndex) {
-		throw new Error("Invalid patch format: expected *** Begin Patch ... *** End Patch envelope");
+		throw new PatchParseError("Invalid patch format: expected *** Begin Patch ... *** End Patch envelope");
 	}
 
 	const hunks: ParsedPatch[] = [];
@@ -912,7 +906,7 @@ function parsePatch(patchText: string): ParsedPatch[] {
 					break;
 				}
 				if (!nextLine.startsWith("+")) {
-					throw new Error(`Invalid patch format: Add File lines must start with '+'`);
+					throw new PatchParseError(`Invalid patch format: Add File lines must start with '+'`);
 				}
 				contentLines.push(nextLine.slice(1));
 				index++;
@@ -968,7 +962,7 @@ function parsePatch(patchText: string): ParsedPatch[] {
 						break;
 					}
 				} else if (!allowMissingContext) {
-					throw new Error(`Expected update hunk to start with a @@ context marker, got: '${nextLine}'`);
+					throw new PatchParseError(`Expected update hunk to start with a @@ context marker, got: '${nextLine}'`);
 				}
 
 				const oldLines: string[] = [];
@@ -979,7 +973,7 @@ function parsePatch(patchText: string): ParsedPatch[] {
 					const hunkLine = lines[index] ?? "";
 					if (hunkLine === "*** End of File") {
 						if (parsedLines === 0) {
-							throw new Error("Update hunk does not contain any lines");
+							throw new PatchParseError("Update hunk does not contain any lines");
 						}
 						isEndOfFile = true;
 						index++;
@@ -1003,7 +997,7 @@ function parsePatch(patchText: string): ParsedPatch[] {
 					} else if (parsedLines > 0) {
 						break;
 					} else {
-						throw new Error(
+						throw new PatchParseError(
 							`Unexpected line found in update hunk: '${hunkLine}'. Every line should start with ' ' (context line), '+' (added line), or '-' (removed line)`,
 						);
 					}
@@ -1012,24 +1006,37 @@ function parsePatch(patchText: string): ParsedPatch[] {
 				}
 
 				if (parsedLines === 0) {
-					throw new Error("Update hunk does not contain any lines");
+					throw new PatchParseError("Update hunk does not contain any lines");
 				}
 				chunks.push({ changeContexts, oldLines, newLines, isEndOfFile });
 			}
 			if (chunks.length === 0 && !movePath) {
-				throw new Error(`Update file hunk for path '${filePath}' is empty`);
+				throw new PatchParseError(`Update file hunk for path '${filePath}' is empty`);
 			}
 
 			hunks.push({ type: "update", filePath, movePath, chunks });
 			continue;
 		}
 
-		throw new Error(
+		throw new PatchParseError(
 			`'${line}' is not a valid hunk header. Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'`,
 		);
 	}
 
 	return hunks;
+}
+
+function parseNonEmptyPatch(patchText: string): ParsedPatch[] {
+	const hunks = parsePatch(patchText);
+	if (hunks.length > 0) {
+		return hunks;
+	}
+
+	const normalized = normalizePatchText(patchText).trim();
+	if (normalized === "*** Begin Patch\n*** End Patch") {
+		throw new PatchParseError("patch rejected: empty patch");
+	}
+	throw new PatchParseError("apply_patch verification failed: no hunks found");
 }
 
 function splitFileLines(content: string): string[] {
@@ -1050,7 +1057,7 @@ function replaceChunks(content: string, filePath: string, chunks: PatchChunk[]):
 		for (const changeContext of chunk.changeContexts) {
 			const contextMatch = seekSequence(originalLines, [changeContext], lineIndex, false);
 			if (contextMatch === undefined) {
-				throw new Error(`Failed to find context '${changeContext}' in ${filePath}`);
+				throw new PatchApplicationError(`Failed to find context '${changeContext}' in ${filePath}`);
 			}
 			fuzz += contextMatch.fuzz;
 			lineIndex = contextMatch.index + 1;
@@ -1075,7 +1082,7 @@ function replaceChunks(content: string, filePath: string, chunks: PatchChunk[]):
 		}
 
 		if (foundAt === undefined) {
-			throw new Error(`Failed to find expected lines in ${filePath}:\n${chunk.oldLines.join("\n")}`);
+			throw new PatchApplicationError(`Failed to find expected lines in ${filePath}:\n${chunk.oldLines.join("\n")}`);
 		}
 
 		fuzz += foundAt.fuzz;
@@ -1095,7 +1102,7 @@ async function applySingleHunk(
 	cwd: string,
 	hunk: ParsedPatch,
 ): Promise<{ summary: string; appliedFile: string; fuzz: number }> {
-	const absolutePath = resolvePatchPath(cwd, hunk.filePath);
+	const absolutePath = await resolvePatchPath(cwd, hunk.filePath);
 	if (hunk.type === "add") {
 		await mkdir(path.dirname(absolutePath), { recursive: true });
 		await writeFileAtomic(absolutePath, hunk.content);
@@ -1116,7 +1123,7 @@ async function applySingleHunk(
 	const nextContent = chunkResult.content;
 
 	if (hunk.movePath) {
-		const absoluteMovePath = resolvePatchPath(cwd, hunk.movePath);
+		const absoluteMovePath = await resolvePatchPath(cwd, hunk.movePath);
 		await mkdir(path.dirname(absoluteMovePath), { recursive: true });
 		await writeFileAtomic(absoluteMovePath, nextContent);
 		if (absoluteMovePath !== absolutePath) {
@@ -1138,15 +1145,14 @@ export async function applyPatchDetailed(
 	patchText: string,
 	onProgress?: ApplyPatchProgressCallback,
 ): Promise<ApplyPatchResult> {
-	const hunks = parsePatch(patchText);
-	if (hunks.length === 0) {
-		const normalized = normalizePatchText(patchText).trim();
-		if (normalized === "*** Begin Patch\n*** End Patch") {
-			throw new Error("patch rejected: empty patch");
-		}
-		throw new Error("apply_patch verification failed: no hunks found");
-	}
+	return applyParsedPatchDetailed(cwd, parseNonEmptyPatch(patchText), onProgress);
+}
 
+async function applyParsedPatchDetailed(
+	cwd: string,
+	hunks: ParsedPatch[],
+	onProgress?: ApplyPatchProgressCallback,
+): Promise<ApplyPatchResult> {
 	const summaries: string[] = [];
 	const appliedFiles: string[] = [];
 	const failures: ApplyPatchFailure[] = [];
@@ -1185,19 +1191,13 @@ function createRecoveryInstructions(
 	result: Pick<ApplyPatchResult, "appliedFiles" | "failures">,
 ): ApplyPatchRecoveryInstructions {
 	const mustReadFiles = [...new Set(result.failures.map((failure) => failure.filePath))];
-	const mustNotReadFiles = [...new Set(result.appliedFiles.filter((filePath) => !mustReadFiles.includes(filePath)))];
+	const mustReadFileSet = new Set(mustReadFiles);
+	const mustNotReadFiles = [...new Set(result.appliedFiles.filter((filePath) => !mustReadFileSet.has(filePath)))];
 	return { mustReadFiles, mustNotReadFiles };
 }
 
 export async function applyPatch(cwd: string, patchText: string): Promise<string[]> {
-	const hunks = parsePatch(patchText);
-	if (hunks.length === 0) {
-		const normalized = normalizePatchText(patchText).trim();
-		if (normalized === "*** Begin Patch\n*** End Patch") {
-			throw new Error("patch rejected: empty patch");
-		}
-		throw new Error("apply_patch verification failed: no hunks found");
-	}
+	const hunks = parseNonEmptyPatch(patchText);
 
 	const summaries: string[] = [];
 	const appliedFiles: string[] = [];
@@ -1208,14 +1208,15 @@ export async function applyPatch(cwd: string, patchText: string): Promise<string
 			appliedFiles.push(appliedFile);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
+			const failure = { filePath: hunk.filePath, operation: hunk.type, message } satisfies ApplyPatchFailure;
 			const result: ApplyPatchResult = {
 				summaries,
 				appliedFiles,
-				failures: [{ filePath: hunk.filePath, operation: hunk.type, message }],
+				failures: [failure],
 				hasPartialSuccess: appliedFiles.length > 0,
 				recoveryInstructions: createRecoveryInstructions({
 					appliedFiles,
-					failures: [{ filePath: hunk.filePath, operation: hunk.type, message }],
+					failures: [failure],
 				}),
 				details: { fuzz: 0 },
 			};
@@ -1231,26 +1232,27 @@ async function createPendingPatchUpdate(
 	patchText: string,
 	progress?: ApplyPatchProgress,
 	previewOverride?: ApplyPatchPreview,
+	parsedHunks?: ParsedPatch[],
 ): Promise<{ text: string; details: ApplyPatchToolDetails | undefined }> {
 	const title = progress
 		? `Applying patch (${progress.applied + progress.failed}/${progress.total})...`
 		: "Applying patch...";
 	if (previewOverride) {
 		return {
-			text: `${title}\n${formatPatchPreview(previewOverride)}`,
+			text: `${title}\n${formatPatchPreview(previewOverride, cwd)}`,
 			details: { preview: previewOverride, progress },
 		};
 	}
 
 	try {
-		const hunks = parsePatch(patchText);
+		const hunks = parsedHunks ?? parsePatch(patchText);
 		if (hunks.length === 0) {
 			return { text: title, details: progress ? { progress } : undefined };
 		}
 
 		const preview = await createPatchPreview(cwd, hunks);
 		if (preview.files.some((file) => file.diff.trim().length > 0)) {
-			return { text: `${title}\n${formatPatchPreview(preview)}`, details: { preview, progress } };
+			return { text: `${title}\n${formatPatchPreview(preview, cwd)}`, details: { preview, progress } };
 		}
 	} catch {
 		return {
@@ -1286,8 +1288,50 @@ function restoreEditToolsFromBaseline(currentToolNames: string[], baselineToolNa
 	return [...new Set(restoredToolNames)];
 }
 
-function resolvePatchPath(cwd: string, filePath: string): string {
-	return path.resolve(cwd, filePath);
+function isPathWithinWorkspace(workspacePath: string, candidatePath: string): boolean {
+	const relativePath = path.relative(workspacePath, candidatePath);
+	return (
+		relativePath === "" ||
+		(!relativePath.startsWith(`..${path.sep}`) && relativePath !== ".." && !path.isAbsolute(relativePath))
+	);
+}
+
+async function findExistingAncestor(directoryPath: string, workspacePath: string): Promise<string> {
+	let currentPath = directoryPath;
+	while (isPathWithinWorkspace(workspacePath, currentPath)) {
+		try {
+			await stat(currentPath);
+			return currentPath;
+		} catch (error) {
+			if (!hasErrorCode(error, "ENOENT")) {
+				throw error;
+			}
+		}
+
+		const parentPath = path.dirname(currentPath);
+		if (parentPath === currentPath) {
+			break;
+		}
+		currentPath = parentPath;
+	}
+
+	throw new PatchApplicationError(`Patch path escapes workspace: ${directoryPath}`);
+}
+
+async function resolvePatchPath(cwd: string, filePath: string): Promise<string> {
+	const workspacePath = await realpath(cwd);
+	const absolutePath = path.resolve(workspacePath, filePath);
+	if (!isPathWithinWorkspace(workspacePath, absolutePath)) {
+		throw new PatchApplicationError(`Patch path escapes workspace: ${filePath}`);
+	}
+
+	const existingAncestor = await findExistingAncestor(path.dirname(absolutePath), workspacePath);
+	const realAncestor = await realpath(existingAncestor);
+	if (!isPathWithinWorkspace(workspacePath, realAncestor)) {
+		throw new PatchApplicationError(`Patch path escapes workspace: ${filePath}`);
+	}
+
+	return absolutePath;
 }
 
 function syncToolset(
@@ -1339,30 +1383,48 @@ export function createApplyPatchTool(): ApplyPatchToolDefinition {
 				throw new Error("input is required");
 			}
 
-			let totalOperations = 0;
+			let parsedHunks: ParsedPatch[] | undefined;
 			try {
-				totalOperations = parsePatch(normalizedParams.input).length;
+				parsedHunks = parseNonEmptyPatch(normalizedParams.input);
 			} catch {
 				// createPendingPatchUpdate keeps incomplete or invalid patch text renderable.
 			}
+			const totalOperations = parsedHunks?.length ?? 0;
 			const initialProgress = totalOperations > 0 ? { applied: 0, failed: 0, total: totalOperations } : undefined;
-			const pendingUpdate = await createPendingPatchUpdate(ctx.cwd, normalizedParams.input, initialProgress);
+			const pendingUpdate = await createPendingPatchUpdate(
+				ctx.cwd,
+				normalizedParams.input,
+				initialProgress,
+				undefined,
+				parsedHunks,
+			);
 			onUpdate?.({
 				content: [{ type: "text", text: pendingUpdate.text }],
 				details: pendingUpdate.details,
 			});
 
 			const preview = pendingUpdate.details?.preview;
-			const result = await applyPatchDetailed(ctx.cwd, normalizedParams.input, async (progress) => {
-				const progressUpdate = await createPendingPatchUpdate(ctx.cwd, normalizedParams.input, progress, preview);
-				onUpdate?.({
-					content: [{ type: "text", text: progressUpdate.text }],
-					details: progressUpdate.details,
-				});
-			});
+			const result = await applyParsedPatchDetailed(
+				ctx.cwd,
+				parsedHunks ?? parseNonEmptyPatch(normalizedParams.input),
+				async (progress) => {
+					const progressUpdate = await createPendingPatchUpdate(
+						ctx.cwd,
+						normalizedParams.input,
+						progress,
+						preview,
+						parsedHunks,
+					);
+					onUpdate?.({
+						content: [{ type: "text", text: progressUpdate.text }],
+						details: progressUpdate.details,
+					});
+				},
+			);
 			if (result.failures.length > 0) {
-				const failed = result.recoveryInstructions.mustReadFiles.join(", ");
-				const mustReadText = failed.includes(",") ? failed.split(", ").join(" and ") : failed;
+				const mustReadFiles = result.recoveryInstructions.mustReadFiles;
+				const failed = mustReadFiles.join(", ");
+				const mustReadText = mustReadFiles.join(" and ");
 				return {
 					content: [
 						{

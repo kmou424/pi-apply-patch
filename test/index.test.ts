@@ -1,8 +1,7 @@
-import { mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-	__testWriteFileAtomic,
 	APPLY_PATCH_FREEFORM_DESCRIPTION,
 	APPLY_PATCH_LARK_GRAMMAR,
 	type ApplyPatchExtensionAPI,
@@ -12,9 +11,11 @@ import {
 	extractPatchedPaths,
 	type FreeformToolFormat,
 	isOpenAIGptModel,
+	PatchParseError,
 	registerApplyPatchExtension,
 	truncatePreview,
 } from "../src/index.js";
+import { writeFileAtomic } from "../src/write-file-atomic.js";
 
 const tempDirectories: string[] = [];
 const identityTheme = {
@@ -91,6 +92,38 @@ describe("pi-apply-patch", () => {
 		expect(await readFile(path.join(directory, "sample.txt"), "utf-8")).toBe("after\n");
 	});
 
+	it("#given parent traversal path #when applying patch #then rejects outside workspace", async () => {
+		// given
+		const directory = await createTempDirectory();
+		const outsidePath = path.join(path.dirname(directory), "outside.ts");
+		tempDirectories.push(outsidePath);
+		await writeFile(outsidePath, "outside\n", "utf-8");
+		const patch = `*** Begin Patch
+*** Update File: ../outside.ts
+@@
+-outside
++changed
+*** End Patch`;
+
+		// when / then
+		await expect(applyPatch(directory, patch)).rejects.toThrow("escapes workspace");
+		expect(await readFile(outsidePath, "utf-8")).toBe("outside\n");
+	});
+
+	it("#given absolute path outside workspace #when applying patch #then rejects outside workspace", async () => {
+		// given
+		const directory = await createTempDirectory();
+		const patch = `*** Begin Patch
+*** Update File: /etc/passwd
+@@
+-root
++toor
+*** End Patch`;
+
+		// when / then
+		await expect(applyPatch(directory, patch)).rejects.toThrow("escapes workspace");
+	});
+
 	it("#given apply_patch tool execution #when started #then emits pending TUI diff update", async () => {
 		// given
 		const directory = await createTempDirectory();
@@ -146,6 +179,41 @@ describe("pi-apply-patch", () => {
 		expect(rendered).toContain("sample.txt (+1 -1)");
 		expect(rendered).toContain("+1 after");
 		expect(rendered).not.toContain("Index:");
+	});
+
+	it("#given nested cwd #when previewing absolute workspace path #then formats relative to cwd", async () => {
+		// given
+		const directory = await createTempDirectory();
+		const nestedDirectory = path.join(directory, "session");
+		await mkdir(nestedDirectory);
+		const absoluteFilePath = path.join(nestedDirectory, "sample.txt");
+		await writeFile(absoluteFilePath, "before\n", "utf-8");
+		const patch = `*** Begin Patch
+*** Update File: ${absoluteFilePath}
+@@
+-before
++after
+*** End Patch`;
+		const updates: string[] = [];
+
+		// when
+		await createApplyPatchTool().execute(
+			"apply-patch-cwd-preview-test",
+			{ input: patch },
+			undefined,
+			(update) => {
+				const text = update.content.find((block) => block.type === "text")?.text;
+				if (text) {
+					updates.push(text);
+				}
+			},
+			{ cwd: nestedDirectory } as never,
+		);
+
+		// then
+		expect(updates[0]).toContain("• Edited sample.txt (+1 -1)");
+		expect(updates[0]).not.toContain(path.basename(directory));
+		expect(await readFile(absoluteFilePath, "utf-8")).toBe("after\n");
 	});
 
 	it("#given large patch preview #when truncating #then keeps changed hunk visible", async () => {
@@ -479,7 +547,7 @@ EOF`;
 		expect(await readFile(path.join(directory, "new.txt"), "utf-8")).toBe("no trailing newline");
 	});
 
-	it("#given absolute path outside workspace #when executed #then applies patch", async () => {
+	it("#given absolute path outside workspace #when executed #then rejects patch", async () => {
 		// given
 		const directory = await createTempDirectory();
 		const outsidePath = path.join(path.dirname(directory), "outside-apply-patch.txt");
@@ -489,14 +557,12 @@ EOF`;
 +outside
 *** End Patch`;
 
-		// when
-		await applyPatch(directory, patch);
-
-		// then
-		expect(await readFile(outsidePath, "utf-8")).toBe("outside\n");
+		// when / then
+		await expect(applyPatch(directory, patch)).rejects.toThrow("escapes workspace");
+		await expect(readFile(outsidePath, "utf-8")).rejects.toMatchObject({ code: "ENOENT" });
 	});
 
-	it("#given symlink escaping workspace #when executed #then applies patch", async () => {
+	it("#given symlink escaping workspace #when executed #then rejects patch", async () => {
 		// given
 		const directory = await createTempDirectory();
 		const outsideDirectory = await createTempDirectory();
@@ -506,11 +572,22 @@ EOF`;
 +outside
 *** End Patch`;
 
-		// when
-		await applyPatch(directory, patch);
+		// when / then
+		await expect(applyPatch(directory, patch)).rejects.toThrow("escapes workspace");
+		await expect(readFile(path.join(outsideDirectory, "outside.txt"), "utf-8")).rejects.toMatchObject({
+			code: "ENOENT",
+		});
+	});
 
-		// then
-		expect(await readFile(path.join(outsideDirectory, "outside.txt"), "utf-8")).toBe("outside\n");
+	it("#given empty codex patch #when applying #then throws typed parse error", async () => {
+		// given
+		const directory = await createTempDirectory();
+		const patch = `*** Begin Patch
+*** End Patch`;
+
+		// when / then
+		await expect(applyPatch(directory, patch)).rejects.toBeInstanceOf(PatchParseError);
+		await expect(applyPatchDetailed(directory, patch)).rejects.toBeInstanceOf(PatchParseError);
 	});
 
 	it("#given invalid codex hunk header #when executed #then reports parser diagnostic", async () => {
@@ -686,7 +763,7 @@ EOF`;
 		};
 
 		// when
-		await __testWriteFileAtomic("/tmp/target.txt", "content", operations);
+		await writeFileAtomic("/tmp/target.txt", "content", operations);
 
 		// then
 		expect(calls).toEqual(["writeFile", "rename:1", "unlink", "rename:2"]);
