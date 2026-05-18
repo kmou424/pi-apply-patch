@@ -586,14 +586,16 @@ function getApplyPatchRenderState(toolCallId: string, cwd: string, patchText: st
 	try {
 		const hunks = parsePatch(patchText);
 		if (hunks.length > 0) {
-			const files = hunks.map((hunk) => ({
-				filePath: hunk.filePath,
-				movePath: hunk.type === "update" ? hunk.movePath : undefined,
-				operation: hunk.type,
-				diff: "",
-				added: 0,
-				removed: 0,
-			})) satisfies ApplyPatchPreviewFile[];
+			const files = hunks.map((hunk) => {
+				const file = {
+					filePath: hunk.filePath,
+					operation: hunk.type,
+					diff: "",
+					added: 0,
+					removed: 0,
+				} satisfies ApplyPatchPreviewFile;
+				return hunk.type === "update" && hunk.movePath !== undefined ? { ...file, movePath: hunk.movePath } : file;
+			}) satisfies ApplyPatchPreviewFile[];
 			const preview: ApplyPatchPreview = { files, added: 0, removed: 0 };
 			collapsed = formatPatchPreview(preview, cwd, false);
 			expanded = formatPatchPreview(preview, cwd, true);
@@ -889,7 +891,8 @@ async function createPatchPreview(cwd: string, hunks: ParsedPatch[]): Promise<Ap
 			await resolvePatchPath(cwd, hunk.movePath);
 		}
 		const diff = createPatchDiff(oldContent, newContent);
-		files.push({ filePath: hunk.filePath, movePath: hunk.movePath, operation: "update", ...diff });
+		const file = { filePath: hunk.filePath, operation: "update", ...diff } satisfies ApplyPatchPreviewFile;
+		files.push(hunk.movePath !== undefined ? { ...file, movePath: hunk.movePath } : file);
 	}
 
 	return {
@@ -1037,7 +1040,11 @@ function parsePatch(patchText: string): ParsedPatch[] {
 				throw new PatchParseError(`Update file hunk for path '${filePath}' is empty`);
 			}
 
-			hunks.push({ type: "update", filePath, movePath, chunks });
+			hunks.push(
+				movePath !== undefined
+					? { type: "update", filePath, movePath, chunks }
+					: { type: "update", filePath, chunks },
+			);
 			continue;
 		}
 
@@ -1261,9 +1268,11 @@ async function createPendingPatchUpdate(
 		? `Applying patch (${progress.applied + progress.failed}/${progress.total})...`
 		: "Applying patch...";
 	if (previewOverride) {
+		const details: ApplyPatchToolDetails = { preview: previewOverride };
+		if (progress) details.progress = progress;
 		return {
 			text: `${title}\n${formatPatchPreview(previewOverride, cwd)}`,
-			details: { preview: previewOverride, progress },
+			details,
 		};
 	}
 
@@ -1275,7 +1284,9 @@ async function createPendingPatchUpdate(
 
 		const preview = await createPatchPreview(cwd, hunks);
 		if (preview.files.some((file) => file.diff.trim().length > 0)) {
-			return { text: `${title}\n${formatPatchPreview(preview, cwd)}`, details: { preview, progress } };
+			const details: ApplyPatchToolDetails = { preview };
+			if (progress) details.progress = progress;
+			return { text: `${title}\n${formatPatchPreview(preview, cwd)}`, details };
 		}
 	} catch {
 		return {
