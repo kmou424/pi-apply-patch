@@ -1,5 +1,7 @@
-import { mkdir, readFile, realpath, rm, stat } from "node:fs/promises";
+import { mkdir, readFile, rm, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import {
@@ -181,6 +183,7 @@ export const PATCH_PREVIEW_MAX_CHARS = 4000;
 const PATCH_PREVIEW_HEAD_LINES = 8;
 const PATCH_PREVIEW_TAIL_LINES = PATCH_PREVIEW_MAX_LINES - PATCH_PREVIEW_HEAD_LINES - 1;
 const PATCH_PREVIEW_TRUNCATION_MARKER = "…";
+const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const applyPatchRenderStates = new Map<string, ApplyPatchRenderState>();
 
 function applyLayeredBackground(theme: ApplyPatchTheme, bgName: ApplyPatchThemeBg, text: string): string {
@@ -431,7 +434,11 @@ export function extractPatchedPaths(patchText: string): string[] {
 	return Array.from(matches, (match) => match[1] ?? "");
 }
 
-function createPatchDiff(oldContent: string, newContent: string): { diff: string; added: number; removed: number } {
+function createPatchDiff(
+	oldContent: string,
+	newContent: string,
+	contextLines = 4,
+): { diff: string; added: number; removed: number } {
 	const parts = Diff.diffLines(oldContent, newContent);
 	const oldLines = oldContent.split("\n");
 	const newLines = newContent.split("\n");
@@ -441,35 +448,123 @@ function createPatchDiff(oldContent: string, newContent: string): { diff: string
 	let newLineNum = 1;
 	let added = 0;
 	let removed = 0;
+	let lastWasChange = false;
 
-	for (const part of parts) {
+	for (let partIndex = 0; partIndex < parts.length; partIndex++) {
+		const part = parts[partIndex];
+		if (!part) {
+			continue;
+		}
 		const rawLines = part.value.split("\n");
 		if (rawLines[rawLines.length - 1] === "") {
 			rawLines.pop();
 		}
 
-		for (const line of rawLines) {
-			if (part.added) {
-				output.push(`+${String(newLineNum).padStart(lineNumWidth, " ")} ${line}`);
-				newLineNum++;
-				added++;
-				continue;
-			}
+		if (part.added || part.removed) {
+			for (const line of rawLines) {
+				if (part.added) {
+					output.push(`+${String(newLineNum).padStart(lineNumWidth, " ")} ${line}`);
+					newLineNum++;
+					added++;
+					continue;
+				}
 
-			if (part.removed) {
 				output.push(`-${String(oldLineNum).padStart(lineNumWidth, " ")} ${line}`);
 				oldLineNum++;
 				removed++;
-				continue;
 			}
-
-			output.push(` ${String(oldLineNum).padStart(lineNumWidth, " ")} ${line}`);
-			oldLineNum++;
-			newLineNum++;
+			lastWasChange = true;
+			continue;
 		}
+
+		const nextPart = parts[partIndex + 1];
+		const nextPartIsChange = nextPart !== undefined && Boolean(nextPart.added || nextPart.removed);
+		const hasLeadingChange = lastWasChange;
+		const hasTrailingChange = nextPartIsChange;
+
+		if (hasLeadingChange && hasTrailingChange) {
+			if (rawLines.length <= contextLines * 2) {
+				for (const line of rawLines) {
+					output.push(` ${String(oldLineNum).padStart(lineNumWidth, " ")} ${line}`);
+					oldLineNum++;
+					newLineNum++;
+				}
+			} else {
+				const leadingLines = rawLines.slice(0, contextLines);
+				const trailingLines = rawLines.slice(rawLines.length - contextLines);
+				const skippedLines = rawLines.length - leadingLines.length - trailingLines.length;
+
+				for (const line of leadingLines) {
+					output.push(` ${String(oldLineNum).padStart(lineNumWidth, " ")} ${line}`);
+					oldLineNum++;
+					newLineNum++;
+				}
+				output.push(` ${"".padStart(lineNumWidth, " ")} ...`);
+				oldLineNum += skippedLines;
+				newLineNum += skippedLines;
+				for (const line of trailingLines) {
+					output.push(` ${String(oldLineNum).padStart(lineNumWidth, " ")} ${line}`);
+					oldLineNum++;
+					newLineNum++;
+				}
+			}
+		} else if (hasLeadingChange) {
+			const shownLines = rawLines.slice(0, contextLines);
+			const skippedLines = rawLines.length - shownLines.length;
+			for (const line of shownLines) {
+				output.push(` ${String(oldLineNum).padStart(lineNumWidth, " ")} ${line}`);
+				oldLineNum++;
+				newLineNum++;
+			}
+			if (skippedLines > 0) {
+				output.push(` ${"".padStart(lineNumWidth, " ")} ...`);
+				oldLineNum += skippedLines;
+				newLineNum += skippedLines;
+			}
+		} else if (hasTrailingChange) {
+			const skippedLines = Math.max(0, rawLines.length - contextLines);
+			if (skippedLines > 0) {
+				output.push(` ${"".padStart(lineNumWidth, " ")} ...`);
+				oldLineNum += skippedLines;
+				newLineNum += skippedLines;
+			}
+			for (const line of rawLines.slice(skippedLines)) {
+				output.push(` ${String(oldLineNum).padStart(lineNumWidth, " ")} ${line}`);
+				oldLineNum++;
+				newLineNum++;
+			}
+		} else {
+			oldLineNum += rawLines.length;
+			newLineNum += rawLines.length;
+		}
+
+		lastWasChange = false;
 	}
 
 	return { diff: output.join("\n"), added, removed };
+}
+
+function normalizePathInput(input: string): string {
+	let normalized = input.replace(UNICODE_SPACES, " ");
+	if (normalized.startsWith("@")) {
+		normalized = normalized.slice(1);
+	}
+	if (normalized === "~") {
+		return homedir();
+	}
+	if (normalized.startsWith("~/") || (process.platform === "win32" && normalized.startsWith("~\\"))) {
+		return path.join(homedir(), normalized.slice(2));
+	}
+	if (/^file:\/\//.test(normalized)) {
+		return fileURLToPath(normalized);
+	}
+	return normalized;
+}
+
+function resolvePathToCwd(filePath: string, cwd: string): string {
+	const normalizedPath = normalizePathInput(filePath);
+	const normalizedCwd = normalizePathInput(cwd);
+	return path.isAbsolute(normalizedPath) ? path.resolve(normalizedPath) : path.resolve(normalizedCwd, normalizedPath);
 }
 
 async function readExistingFileForPreview(absolutePath: string): Promise<string> {
@@ -865,7 +960,7 @@ function formatPendingPatchPaths(patchText: string): string {
 async function createPatchPreview(cwd: string, hunks: ParsedPatch[]): Promise<ApplyPatchPreview> {
 	const files: ApplyPatchPreviewFile[] = [];
 	for (const hunk of hunks) {
-		const absolutePath = await resolvePatchPath(cwd, hunk.filePath);
+		const absolutePath = resolvePatchPath(cwd, hunk.filePath);
 		if (hunk.type === "add") {
 			const oldContent = await readExistingFileForPreview(absolutePath);
 			const diff = createPatchDiff(oldContent, hunk.content);
@@ -884,7 +979,7 @@ async function createPatchPreview(cwd: string, hunks: ParsedPatch[]): Promise<Ap
 		const newContent =
 			hunk.chunks.length === 0 ? oldContent : replaceChunks(oldContent, hunk.filePath, hunk.chunks).content;
 		if (hunk.movePath) {
-			await resolvePatchPath(cwd, hunk.movePath);
+			resolvePatchPath(cwd, hunk.movePath);
 		}
 		const diff = createPatchDiff(oldContent, newContent);
 		const file = { filePath: hunk.filePath, operation: "update", ...diff } satisfies ApplyPatchPreviewFile;
@@ -1128,7 +1223,7 @@ async function applySingleHunk(
 	cwd: string,
 	hunk: ParsedPatch,
 ): Promise<{ summary: string; appliedFile: string; fuzz: number }> {
-	const absolutePath = await resolvePatchPath(cwd, hunk.filePath);
+	const absolutePath = resolvePatchPath(cwd, hunk.filePath);
 	if (hunk.type === "add") {
 		await mkdir(path.dirname(absolutePath), { recursive: true });
 		await writeFileAtomic(absolutePath, hunk.content);
@@ -1149,7 +1244,7 @@ async function applySingleHunk(
 	const nextContent = chunkResult.content;
 
 	if (hunk.movePath) {
-		const absoluteMovePath = await resolvePatchPath(cwd, hunk.movePath);
+		const absoluteMovePath = resolvePatchPath(cwd, hunk.movePath);
 		await mkdir(path.dirname(absoluteMovePath), { recursive: true });
 		await writeFileAtomic(absoluteMovePath, nextContent);
 		if (absoluteMovePath !== absolutePath) {
@@ -1309,50 +1404,8 @@ function replaceApplyPatchWithEditTools(toolNames: string[]): string[] {
 	return [...withoutExtensionManagedEditTools(toolNames), ...STANDARD_EDIT_TOOL_NAMES];
 }
 
-function isPathWithinWorkspace(workspacePath: string, candidatePath: string): boolean {
-	const relativePath = path.relative(workspacePath, candidatePath);
-	return (
-		relativePath === "" ||
-		(!relativePath.startsWith(`..${path.sep}`) && relativePath !== ".." && !path.isAbsolute(relativePath))
-	);
-}
-
-async function findExistingAncestor(directoryPath: string, workspacePath: string): Promise<string> {
-	let currentPath = directoryPath;
-	while (isPathWithinWorkspace(workspacePath, currentPath)) {
-		try {
-			await stat(currentPath);
-			return currentPath;
-		} catch (error) {
-			if (!hasErrorCode(error, "ENOENT")) {
-				throw error;
-			}
-		}
-
-		const parentPath = path.dirname(currentPath);
-		if (parentPath === currentPath) {
-			break;
-		}
-		currentPath = parentPath;
-	}
-
-	throw new PatchApplicationError(`Patch path escapes workspace: ${directoryPath}`);
-}
-
-async function resolvePatchPath(cwd: string, filePath: string): Promise<string> {
-	const workspacePath = await realpath(cwd);
-	const absolutePath = path.resolve(workspacePath, filePath);
-	if (!isPathWithinWorkspace(workspacePath, absolutePath)) {
-		throw new PatchApplicationError(`Patch path escapes workspace: ${filePath}`);
-	}
-
-	const existingAncestor = await findExistingAncestor(path.dirname(absolutePath), workspacePath);
-	const realAncestor = await realpath(existingAncestor);
-	if (!isPathWithinWorkspace(workspacePath, realAncestor)) {
-		throw new PatchApplicationError(`Patch path escapes workspace: ${filePath}`);
-	}
-
-	return absolutePath;
+function resolvePatchPath(cwd: string, filePath: string): string {
+	return resolvePathToCwd(filePath, cwd);
 }
 
 function syncToolset(
@@ -1453,13 +1506,13 @@ export function createApplyPatchTool(): ApplyPatchToolDefinition {
 								.join("\n"),
 						},
 					],
-					details: { result },
+					details: preview ? { preview, result } : { result },
 				};
 			}
 
 			return {
 				content: [{ type: "text", text: result.summaries.join("\n") }],
-				details: { result },
+				details: preview ? { preview, result } : { result },
 			};
 		},
 		renderCall(args, theme, context) {
@@ -1476,11 +1529,19 @@ export function createApplyPatchTool(): ApplyPatchToolDefinition {
 			const component = new Container();
 			const preview = result.details?.preview;
 			if (preview) {
-				const bgName = options.isPartial ? "toolPendingBg" : "toolSuccessBg";
+				const bgName = options.isPartial
+					? "toolPendingBg"
+					: result.details?.result && result.details.result.failures.length > 0
+						? "toolErrorBg"
+						: "toolSuccessBg";
 				const progress = result.details?.progress;
 				const title = progress
 					? `Applying patch (${progress.applied + progress.failed}/${progress.total})`
-					: "Applying patch";
+					: options.isPartial
+						? "Applying patch"
+						: result.details?.result && result.details.result.failures.length > 0
+							? "Patch partially failed"
+							: "Applied patch";
 				const box = new Box(1, 1, (text: string) => applyLayeredBackground(theme, bgName, text));
 				box.addChild(new Text(theme.fg("toolTitle", theme.bold(title)), 0, 0));
 				box.addChild(new Spacer(1));

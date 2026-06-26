@@ -213,36 +213,45 @@ describe("pi-apply-patch", () => {
 		expect(await readFile(path.join(directory, "sample.txt"), "utf-8")).toBe("after\n");
 	});
 
-	it("#given parent traversal path #when applying patch #then rejects outside workspace", async () => {
+	it("#given parent traversal path #when applying patch #then applies outside cwd", async () => {
 		// given
 		const directory = await createTempDirectory();
-		const outsidePath = path.join(path.dirname(directory), "outside.ts");
+		const outsidePath = path.join(path.dirname(directory), `${path.basename(directory)}-outside.ts`);
+		const relativeOutsidePath = path.relative(directory, outsidePath);
 		tempDirectories.push(outsidePath);
 		await writeFile(outsidePath, "outside\n", "utf-8");
 		const patch = `*** Begin Patch
-*** Update File: ../outside.ts
+*** Update File: ${relativeOutsidePath}
 @@
 -outside
 +changed
 *** End Patch`;
 
-		// when / then
-		await expect(applyPatch(directory, patch)).rejects.toThrow("escapes workspace");
-		expect(await readFile(outsidePath, "utf-8")).toBe("outside\n");
+		// when
+		await applyPatch(directory, patch);
+
+		// then
+		expect(await readFile(outsidePath, "utf-8")).toBe("changed\n");
 	});
 
-	it("#given absolute path outside workspace #when applying patch #then rejects outside workspace", async () => {
+	it("#given absolute path outside cwd #when applying patch #then applies outside cwd", async () => {
 		// given
 		const directory = await createTempDirectory();
+		const outsidePath = path.join(path.dirname(directory), `${path.basename(directory)}-absolute.ts`);
+		tempDirectories.push(outsidePath);
+		await writeFile(outsidePath, "outside\n", "utf-8");
 		const patch = `*** Begin Patch
-*** Update File: /etc/passwd
+*** Update File: ${outsidePath}
 @@
--root
-+toor
+-outside
++changed
 *** End Patch`;
 
-		// when / then
-		await expect(applyPatch(directory, patch)).rejects.toThrow("escapes workspace");
+		// when
+		await applyPatch(directory, patch);
+
+		// then
+		expect(await readFile(outsidePath, "utf-8")).toBe("changed\n");
 	});
 
 	it("#given apply_patch tool execution #when started #then emits pending TUI diff update", async () => {
@@ -300,6 +309,39 @@ describe("pi-apply-patch", () => {
 		expect(rendered).toContain("sample.txt (+1 -1)");
 		expect(rendered).toContain("+1 after");
 		expect(rendered).not.toContain("Index:");
+	});
+
+	it("#given successful apply_patch tool execution #when rendered #then final result shows diff preview", async () => {
+		// given
+		const directory = await createTempDirectory();
+		await writeFile(path.join(directory, "sample.txt"), "before\n", "utf-8");
+		const patch = `*** Begin Patch
+*** Update File: sample.txt
+@@
+-before
++after
+*** End Patch`;
+		const tool = createApplyPatchTool();
+
+		// when
+		const result = await tool.execute("apply-patch-final-preview-test", { input: patch }, undefined, undefined, {
+			cwd: directory,
+		} as never);
+		const component = tool.renderResult?.(
+			result,
+			{ expanded: true, isPartial: false },
+			identityTheme as never,
+			{ cwd: directory, toolCallId: "apply-patch-final-preview-test", args: { input: patch } } as never,
+		);
+		const rendered = component?.render(120).join("\n") ?? "";
+
+		// then
+		expect(result.details?.preview).toBeDefined();
+		expect(rendered).toContain("Applied patch");
+		expect(rendered).toContain("• Edited sample.txt (+1 -1)");
+		expect(rendered).toContain("-1 before");
+		expect(rendered).toContain("+1 after");
+		expect(await readFile(path.join(directory, "sample.txt"), "utf-8")).toBe("after\n");
 	});
 
 	it("#given nested cwd #when previewing absolute workspace path #then formats relative to cwd", async () => {
@@ -369,6 +411,43 @@ describe("pi-apply-patch", () => {
 		expect(updates[0]).toContain("+30 line-30 updated");
 		expect(updates[0]).not.toContain(" 1 line-1");
 		expect(await readFile(path.join(directory, "large.txt"), "utf-8")).toContain("line-30 updated");
+	});
+
+	it("#given distant change #when previewing diff #then matches pi edit context window", async () => {
+		// given
+		const directory = await createTempDirectory();
+		const original = `${Array.from({ length: 20 }, (_, index) => `line-${index + 1}`).join("\n")}\n`;
+		await writeFile(path.join(directory, "context.txt"), original, "utf-8");
+		const patch = `*** Begin Patch
+*** Update File: context.txt
+@@
+-line-10
++line-10 updated
+*** End Patch`;
+		const updates: string[] = [];
+
+		// when
+		await createApplyPatchTool().execute(
+			"apply-patch-context-preview-test",
+			{ input: patch },
+			undefined,
+			(update) => {
+				const text = update.content.find((block) => block.type === "text")?.text;
+				if (text) {
+					updates.push(text);
+				}
+			},
+			{ cwd: directory } as never,
+		);
+
+		// then
+		expect(updates[0]).toContain(" 6 line-6");
+		expect(updates[0]).toContain("-10 line-10");
+		expect(updates[0]).toContain("+10 line-10 updated");
+		expect(updates[0]).toContain(" 14 line-14");
+		expect(updates[0]).toContain("   ...");
+		expect(updates[0]).not.toContain(" 1 line-1");
+		expect(updates[0]).not.toContain(" 20 line-20");
 	});
 
 	it("#given large generated diff #when truncating #then centers preview around first changed line", () => {
@@ -668,22 +747,24 @@ EOF`;
 		expect(await readFile(path.join(directory, "new.txt"), "utf-8")).toBe("no trailing newline");
 	});
 
-	it("#given absolute path outside workspace #when executed #then rejects patch", async () => {
+	it("#given absolute path outside cwd #when executed #then applies patch", async () => {
 		// given
 		const directory = await createTempDirectory();
-		const outsidePath = path.join(path.dirname(directory), "outside-apply-patch.txt");
+		const outsidePath = path.join(path.dirname(directory), `${path.basename(directory)}-outside-apply-patch.txt`);
 		tempDirectories.push(outsidePath);
 		const patch = `*** Begin Patch
 *** Add File: ${outsidePath}
 +outside
 *** End Patch`;
 
-		// when / then
-		await expect(applyPatch(directory, patch)).rejects.toThrow("escapes workspace");
-		await expect(readFile(outsidePath, "utf-8")).rejects.toMatchObject({ code: "ENOENT" });
+		// when
+		await applyPatch(directory, patch);
+
+		// then
+		expect(await readFile(outsidePath, "utf-8")).toBe("outside\n");
 	});
 
-	it("#given symlink escaping workspace #when executed #then rejects patch", async () => {
+	it("#given symlink escaping cwd #when executed #then applies patch", async () => {
 		// given
 		const directory = await createTempDirectory();
 		const outsideDirectory = await createTempDirectory();
@@ -693,11 +774,11 @@ EOF`;
 +outside
 *** End Patch`;
 
-		// when / then
-		await expect(applyPatch(directory, patch)).rejects.toThrow("escapes workspace");
-		await expect(readFile(path.join(outsideDirectory, "outside.txt"), "utf-8")).rejects.toMatchObject({
-			code: "ENOENT",
-		});
+		// when
+		await applyPatch(directory, patch);
+
+		// then
+		expect(await readFile(path.join(outsideDirectory, "outside.txt"), "utf-8")).toBe("outside\n");
 	});
 
 	it("#given empty codex patch #when applying #then throws typed parse error", async () => {
