@@ -289,7 +289,7 @@ describe("pi-apply-patch", () => {
 		if (!update) {
 			throw new Error("apply_patch did not emit a pending update");
 		}
-		expect(update.text).toContain("Applying patch (0/2)...\n• Edited 2 files (+2 -1)");
+		expect(update.text).toContain("Patching 2 files 0/2");
 		expect(update.text).toContain("sample.txt (+1 -1)");
 		expect(update.text).toContain("-1 before");
 		expect(update.text).toContain("+1 after");
@@ -297,15 +297,47 @@ describe("pi-apply-patch", () => {
 		expect(update.text).toContain("+1 created");
 		expect(update.text).not.toContain("Index:");
 
-		const component = tool.renderResult?.(
+		const state = {};
+		const callComponent = tool.renderCall?.(
+			{ input: patch },
+			identityTheme as never,
+			{
+				args: { input: patch },
+				argsComplete: true,
+				cwd: directory,
+				executionStarted: true,
+				expanded: false,
+				invalidate: () => undefined,
+				isError: false,
+				isPartial: true,
+				lastComponent: undefined,
+				showImages: false,
+				state,
+				toolCallId: "apply-patch-test",
+			} as never,
+		);
+		const resultComponent = tool.renderResult?.(
 			{ content: [{ type: "text", text: update.text }], details: update.update.details },
 			{ expanded: false, isPartial: true },
 			identityTheme as never,
-			{ lastComponent: undefined } as never,
+			{
+				args: { input: patch },
+				argsComplete: true,
+				cwd: directory,
+				executionStarted: true,
+				expanded: false,
+				invalidate: () => undefined,
+				isError: false,
+				isPartial: true,
+				lastComponent: undefined,
+				showImages: false,
+				state,
+				toolCallId: "apply-patch-test",
+			} as never,
 		);
-		const rendered = component?.render(120).join("\n") ?? "";
-		expect(rendered).toContain("Applying patch");
-		expect(rendered).toContain("• Edited 2 files (+2 -1)");
+		const rendered = callComponent?.render(120).join("\n") ?? "";
+		expect(rendered).toContain("apply_patch 0/2 2 files (+2 -1)");
+		expect(resultComponent?.render(120).join("\n").trim()).toBe("");
 		expect(rendered).toContain("sample.txt (+1 -1)");
 		expect(rendered).toContain("+1 after");
 		expect(rendered).not.toContain("Index:");
@@ -327,18 +359,50 @@ describe("pi-apply-patch", () => {
 		const result = await tool.execute("apply-patch-final-preview-test", { input: patch }, undefined, undefined, {
 			cwd: directory,
 		} as never);
-		const component = tool.renderResult?.(
+		const state = {};
+		const callComponent = tool.renderCall?.(
+			{ input: patch },
+			identityTheme as never,
+			{
+				args: { input: patch },
+				argsComplete: true,
+				cwd: directory,
+				executionStarted: true,
+				expanded: false,
+				invalidate: () => undefined,
+				isError: false,
+				isPartial: true,
+				lastComponent: undefined,
+				showImages: false,
+				state,
+				toolCallId: "apply-patch-final-preview-test",
+			} as never,
+		);
+		const resultComponent = tool.renderResult?.(
 			result,
 			{ expanded: true, isPartial: false },
 			identityTheme as never,
-			{ cwd: directory, toolCallId: "apply-patch-final-preview-test", args: { input: patch } } as never,
+			{
+				args: { input: patch },
+				argsComplete: true,
+				cwd: directory,
+				executionStarted: true,
+				expanded: true,
+				invalidate: () => undefined,
+				isError: false,
+				isPartial: false,
+				lastComponent: undefined,
+				showImages: false,
+				state,
+				toolCallId: "apply-patch-final-preview-test",
+			} as never,
 		);
-		const rendered = component?.render(120).join("\n") ?? "";
+		const rendered = callComponent?.render(120).join("\n") ?? "";
 
 		// then
 		expect(result.details?.preview).toBeDefined();
-		expect(rendered).toContain("Applied patch");
-		expect(rendered).toContain("• Edited sample.txt (+1 -1)");
+		expect(rendered).toContain("apply_patch sample.txt (+1 -1)");
+		expect(resultComponent?.render(120).join("\n").trim()).toBe("");
 		expect(rendered).toContain("-1 before");
 		expect(rendered).toContain("+1 after");
 		expect(await readFile(path.join(directory, "sample.txt"), "utf-8")).toBe("after\n");
@@ -374,7 +438,8 @@ describe("pi-apply-patch", () => {
 		);
 
 		// then
-		expect(updates[0]).toContain("• Edited sample.txt (+1 -1)");
+		expect(updates[0]).toContain("Patching sample.txt 0/1");
+		expect(updates[0]).toContain("-1 before");
 		expect(updates[0]).not.toContain(path.basename(directory));
 		expect(await readFile(absoluteFilePath, "utf-8")).toBe("after\n");
 	});
@@ -503,8 +568,8 @@ describe("pi-apply-patch", () => {
 		expect(updates[0]?.details?.progress).toEqual({ applied: 0, failed: 0, total: 2 });
 		expect(updates[1]?.details?.progress).toEqual({ applied: 1, failed: 0, total: 2 });
 		expect(updates[2]?.details?.progress).toEqual({ applied: 2, failed: 0, total: 2 });
-		expect(updates[1]?.content.find((block) => block.type === "text")?.text).toContain("Applying patch (1/2)...");
-		expect(updates[2]?.content.find((block) => block.type === "text")?.text).toContain("Applying patch (2/2)...");
+		expect(updates[1]?.content.find((block) => block.type === "text")?.text).toContain("Patching 2 files 1/2");
+		expect(updates[2]?.content.find((block) => block.type === "text")?.text).toContain("Patching 2 files 2/2");
 		expect(await readFile(path.join(directory, "first.txt"), "utf-8")).toBe("ONE\n");
 		expect(await readFile(path.join(directory, "second.txt"), "utf-8")).toBe("TWO\n");
 	});
@@ -562,7 +627,7 @@ describe("pi-apply-patch", () => {
 		);
 
 		// then
-		expect(updates[0]).toContain("• Edited existing.txt (+1 -1)");
+		expect(updates[0]).toContain("Patching existing.txt 0/1");
 		expect(updates[0]).toContain("-1 old");
 		expect(updates[0]).toContain("+1 new");
 		expect(await readFile(path.join(directory, "existing.txt"), "utf-8")).toBe("new\n");

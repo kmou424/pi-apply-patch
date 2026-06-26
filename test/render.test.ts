@@ -36,6 +36,57 @@ const ansiTheme = {
 	inverse: (text: string) => text,
 };
 
+function renderApplyPatchCallWithResult(
+	result: Parameters<NonNullable<ReturnType<typeof createApplyPatchTool>["renderResult"]>>[0],
+	theme: typeof identityTheme | typeof markerTheme | typeof ansiTheme = identityTheme,
+	args = { input: "" },
+): { callRendered: string; resultRendered: string } {
+	const tool = createApplyPatchTool();
+	const state = {};
+	const callComponent = tool.renderCall?.(
+		args,
+		theme as never,
+		{
+			args,
+			argsComplete: true,
+			cwd: "/workspace/project",
+			executionStarted: true,
+			expanded: false,
+			invalidate: () => undefined,
+			isError: false,
+			isPartial: true,
+			lastComponent: undefined,
+			showImages: false,
+			state,
+			toolCallId: "render-helper",
+		} as never,
+	);
+	const resultComponent = tool.renderResult?.(
+		result,
+		{ expanded: false, isPartial: false },
+		theme as never,
+		{
+			args,
+			argsComplete: true,
+			cwd: "/workspace/project",
+			executionStarted: true,
+			expanded: false,
+			invalidate: () => undefined,
+			isError: false,
+			isPartial: false,
+			lastComponent: undefined,
+			showImages: false,
+			state,
+			toolCallId: "render-helper",
+		} as never,
+	);
+
+	return {
+		callRendered: callComponent?.render(240).join("\n") ?? "",
+		resultRendered: resultComponent?.render(240).join("\n") ?? "",
+	};
+}
+
 describe("render helpers", () => {
 	it("#given plain text diff #when truncating #then falls back to head and tail", () => {
 		// given
@@ -126,7 +177,7 @@ describe("render helpers", () => {
 		const expanded = formatPatchPreview(preview, "/workspace/project", true);
 
 		// then
-		expect(collapsed).toContain("• Edited src/foo.ts (+1 -1)");
+		expect(collapsed).toContain("Edited src/foo.ts (+1 -1)");
 		expect(collapsed).not.toContain("+1 new");
 		expect(expanded).toContain("+1 new");
 	});
@@ -151,7 +202,7 @@ describe("render helpers", () => {
 		const rendered = formatPatchPreview(preview);
 
 		// then
-		expect(rendered).toContain("• Edited src/foo.ts (+1 -1)");
+		expect(rendered).toContain("Edited src/foo.ts (+1 -1)");
 		expect(rendered).toContain("+1 new");
 	});
 
@@ -171,9 +222,7 @@ describe("render helpers", () => {
 		const callText = formatInFlightCallText(patch);
 
 		// then
-		expect(callText).toContain("(2 files)");
-		expect(callText).toContain("src/a.ts");
-		expect(callText).toContain("src/b.ts");
+		expect(callText).toBe("Patching 2 files");
 	});
 
 	it("#given partial args #when rendering call #then shows patching placeholder", () => {
@@ -187,13 +236,14 @@ describe("render helpers", () => {
 			{
 				argsComplete: false,
 				cwd: "/workspace/project",
+				state: {},
 				toolCallId: "call-1",
 			} as never,
 		);
 		const rendered = component?.render(120).join("\n") ?? "";
 
 		// then
-		expect(rendered).toContain("apply_patch: Patching");
+		expect(rendered).toContain("apply_patch Patching");
 	});
 
 	it("#given patch args #when rendering call #then shows paths and count", () => {
@@ -213,20 +263,20 @@ describe("render helpers", () => {
 			{
 				argsComplete: true,
 				cwd: "/workspace/project",
+				state: {},
 				toolCallId: "call-2",
 			} as never,
 		);
 		const rendered = component?.render(200).join("\n") ?? "";
 
 		// then
-		expect(rendered).toContain("apply_patch: Patching (2 files): src/a.ts, src/b.ts");
+		expect(rendered).toContain("apply_patch Patching 2 files");
 	});
 
-	it("#given preview #when rendering result collapsed #then shows headers without diff lines", () => {
+	it("#given preview #when rendering result #then updates call component and leaves result empty", () => {
 		// given
-		const tool = createApplyPatchTool();
 		const result = {
-			content: [{ type: "text" as const, text: "Applying patch" }],
+			content: [{ type: "text" as const, text: "update: src/foo.ts" }],
 			details: {
 				preview: {
 					files: [
@@ -245,24 +295,19 @@ describe("render helpers", () => {
 		};
 
 		// when
-		const component = tool.renderResult?.(
-			result,
-			{ expanded: false, isPartial: false },
-			identityTheme as never,
-			{ cwd: "/workspace/project", toolCallId: "result-1", args: { input: "" } } as never,
-		);
-		const rendered = component?.render(200).join("\n") ?? "";
+		const { callRendered, resultRendered } = renderApplyPatchCallWithResult(result);
 
 		// then
-		expect(rendered).toContain("• Edited src/foo.ts (+1 -1)");
-		expect(rendered).not.toContain("+1 new");
+		expect(callRendered).toContain("apply_patch src/foo.ts (+1 -1)");
+		expect(callRendered).toContain("-1 old");
+		expect(callRendered).toContain("+1 new");
+		expect(resultRendered.trim()).toBe("");
 	});
 
 	it("#given expanded preview #when rendering result #then uses OpenCode-like highlighted diff rows", () => {
 		// given
-		const tool = createApplyPatchTool();
 		const result = {
-			content: [{ type: "text" as const, text: "Applying patch" }],
+			content: [{ type: "text" as const, text: "update: src/foo.ts" }],
 			details: {
 				preview: {
 					files: [
@@ -281,15 +326,10 @@ describe("render helpers", () => {
 		};
 
 		// when
-		const component = tool.renderResult?.(
-			result,
-			{ expanded: true, isPartial: false },
-			markerTheme as never,
-			{ cwd: "/workspace/project", toolCallId: "result-colored", args: { input: "" } } as never,
-		);
-		const rendered = component?.render(200).join("\n") ?? "";
+		const { callRendered: rendered, resultRendered } = renderApplyPatchCallWithResult(result, markerTheme);
 
 		// then
+		expect(resultRendered.trim()).toBe("");
 		expect(rendered).toContain("<bg:toolErrorBg><fg:toolDiffRemoved>-</fg:toolDiffRemoved><fg:muted>1</fg:muted>");
 		expect(rendered).toContain("<fg:toolDiffRemoved>alpha <inverse>old</inverse></fg:toolDiffRemoved>");
 		expect(rendered).toContain("<bg:toolSuccessBg><fg:toolDiffAdded>+</fg:toolDiffAdded><fg:muted>1</fg:muted>");
@@ -299,9 +339,8 @@ describe("render helpers", () => {
 
 	it("#given partial progress preview #when rendering result #then shows realtime progress in pending widget", () => {
 		// given
-		const tool = createApplyPatchTool();
 		const result = {
-			content: [{ type: "text" as const, text: "Applying patch (1/2)..." }],
+			content: [{ type: "text" as const, text: "progress" }],
 			details: {
 				progress: { applied: 1, failed: 0, total: 2 },
 				preview: {
@@ -321,27 +360,20 @@ describe("render helpers", () => {
 		};
 
 		// when
-		const component = tool.renderResult?.(
-			result,
-			{ expanded: false, isPartial: true },
-			markerTheme as never,
-			{ cwd: "/workspace/project", toolCallId: "result-progress", args: { input: "" } } as never,
-		);
-		const rendered = component?.render(200).join("\n") ?? "";
+		const { callRendered: rendered, resultRendered } = renderApplyPatchCallWithResult(result, markerTheme);
 
 		// then
+		expect(resultRendered.trim()).toBe("");
 		expect(rendered).toContain("<bg:toolPendingBg>");
-		expect(rendered).toContain("<bold>Applying patch (1/2)</bold>");
-		expect(rendered).toContain("• Edited src/foo.ts (+1 -1)");
+		expect(rendered).toContain("<bold>apply_patch 1/2 src/foo.ts (+1 -1)</bold>");
 		expect(rendered).toContain("<fg:toolDiffRemoved>alpha <inverse>old</inverse></fg:toolDiffRemoved>");
 		expect(rendered).toContain("<fg:toolDiffAdded>alpha <inverse>new</inverse></fg:toolDiffAdded>");
 	});
 
 	it("#given multi-file preview #when rendering result collapsed #then shows grouped summary", () => {
 		// given
-		const tool = createApplyPatchTool();
 		const result = {
-			content: [{ type: "text" as const, text: "Applying patch" }],
+			content: [{ type: "text" as const, text: "update: src/a.ts\nupdate: src/b.ts" }],
 			details: {
 				preview: {
 					files: [
@@ -355,26 +387,20 @@ describe("render helpers", () => {
 		};
 
 		// when
-		const component = tool.renderResult?.(
-			result,
-			{ expanded: false, isPartial: false },
-			identityTheme as never,
-			{ cwd: "/workspace/project", toolCallId: "result-3", args: { input: "" } } as never,
-		);
-		const rendered = component?.render(400).join("\n") ?? "";
+		const { callRendered: rendered, resultRendered } = renderApplyPatchCallWithResult(result);
 
 		// then
-		expect(rendered).toContain("• Edited 2 files (+2 -0)");
-		expect(rendered).toContain("└ src/a.ts (+1 -0)");
-		expect(rendered).toContain("└ src/b.ts (+1 -0)");
-		expect(rendered).not.toContain("+1 one");
+		expect(rendered).toContain("apply_patch 2 files (+2 -0)");
+		expect(rendered).toContain("Edited src/a.ts (+1 -0)");
+		expect(rendered).toContain("Edited src/b.ts (+1 -0)");
+		expect(rendered).toContain("+1 one");
+		expect(resultRendered.trim()).toBe("");
 	});
 
 	it("#given highlighted diff row #when rendering result in success box #then outer background resumes after row reset", () => {
 		// given
-		const tool = createApplyPatchTool();
 		const result = {
-			content: [{ type: "text" as const, text: "Applied patch" }],
+			content: [{ type: "text" as const, text: "update: src/foo.ts" }],
 			details: {
 				preview: {
 					files: [
@@ -393,13 +419,7 @@ describe("render helpers", () => {
 		};
 
 		// when
-		const component = tool.renderResult?.(
-			result,
-			{ expanded: true, isPartial: false },
-			ansiTheme as never,
-			{ cwd: "/workspace/project", toolCallId: "result-bg", args: { input: "" } } as never,
-		);
-		const rendered = component?.render(120).join("\n") ?? "";
+		const { callRendered: rendered } = renderApplyPatchCallWithResult(result, ansiTheme);
 
 		// then
 		expect(rendered).toContain(`${bgReset}${successBg}`);
@@ -407,10 +427,9 @@ describe("render helpers", () => {
 
 	it("#given large preview #when rendering result expanded #then shows truncation marker", () => {
 		// given
-		const tool = createApplyPatchTool();
 		const diff = Array.from({ length: 50 }, (_, index) => `+${index + 1} line`).join("\n");
 		const result = {
-			content: [{ type: "text" as const, text: "Applying patch" }],
+			content: [{ type: "text" as const, text: "update: src/large.ts" }],
 			details: {
 				preview: {
 					files: [{ filePath: "src/large.ts", operation: "update" as const, diff, added: 50, removed: 0 }],
@@ -421,16 +440,10 @@ describe("render helpers", () => {
 		};
 
 		// when
-		const component = tool.renderResult?.(
-			result,
-			{ expanded: true, isPartial: false },
-			identityTheme as never,
-			{ cwd: "/workspace/project", toolCallId: "result-large", args: { input: "" } } as never,
-		);
-		const rendered = component?.render(400).join("\n") ?? "";
+		const { callRendered: rendered } = renderApplyPatchCallWithResult(result);
 
 		// then
-		expect(rendered).toContain("• Edited src/large.ts (+50 -0)");
+		expect(rendered).toContain("apply_patch src/large.ts (+50 -0)");
 		expect(rendered).toContain("…");
 	});
 });
