@@ -196,6 +196,7 @@ class ApplyPatchCallRenderComponent extends Box {
 	preview: ApplyPatchPreview | undefined;
 	progress: ApplyPatchProgress | undefined;
 	result: ApplyPatchResult | undefined;
+	resultText: string | undefined;
 	callText = "Patching";
 	cwd = process.cwd();
 	patchText = "";
@@ -231,28 +232,96 @@ function getApplyPatchHeaderBg(
 	return (text: string) => applyLayeredBackground(theme, "toolPendingBg", text);
 }
 
-function getPatchPreviewTarget(preview: ApplyPatchPreview, cwd: string): string {
-	const file = preview.files[0];
-	if (preview.files.length === 1 && file) {
-		return formatPatchFilePath(file, cwd);
+function getPatchResultTarget(result: ApplyPatchResult, cwd: string): string {
+	const failedFiles = result.failures.map((failure) => displayPath(failure.filePath, cwd));
+	if (failedFiles.length === 1 && failedFiles[0]) {
+		return failedFiles[0];
 	}
-	return `${preview.files.length} files`;
+	const totalFiles = result.appliedFiles.length + failedFiles.length;
+	if (totalFiles > 0) {
+		return `${totalFiles} files`;
+	}
+	return "";
 }
 
-function formatApplyPatchCallTitle(component: ApplyPatchCallRenderComponent): string {
-	if (component.preview) {
-		const target = getPatchPreviewTarget(component.preview, component.cwd);
-		const lineSummary = formatLineCountSummary(component.preview.added, component.preview.removed);
-		if (component.progress) {
-			return `apply_patch ${component.progress.applied + component.progress.failed}/${component.progress.total} ${target} ${lineSummary}`;
+function renderPathText(filePath: string, cwd: string, theme: ApplyPatchTheme): string {
+	return theme.fg("accent", displayPath(filePath, cwd));
+}
+
+function renderPatchFilePath(file: ApplyPatchPreviewFile, cwd: string, theme: ApplyPatchTheme): string {
+	const filePath = renderPathText(file.filePath, cwd, theme);
+	if (!file.movePath) {
+		return filePath;
+	}
+	return `${filePath} ${theme.fg("muted", "→")} ${renderPathText(file.movePath, cwd, theme)}`;
+}
+
+function renderPatchFileHeader(file: ApplyPatchPreviewFile, cwd: string, theme: ApplyPatchTheme): string {
+	return `${theme.fg("toolTitle", formatPatchOperation(file.operation))} ${renderPatchFilePath(file, cwd, theme)} ${theme.fg("muted", formatLineCountSummary(file.added, file.removed))}`;
+}
+
+function renderPatchPreviewTarget(preview: ApplyPatchPreview, cwd: string, theme: ApplyPatchTheme): string {
+	const file = preview.files[0];
+	if (preview.files.length === 1 && file) {
+		return renderPatchFilePath(file, cwd, theme);
+	}
+	return theme.fg("accent", `${preview.files.length} files`);
+}
+
+function renderPatchResultTarget(result: ApplyPatchResult, cwd: string, theme: ApplyPatchTheme): string {
+	const target = getPatchResultTarget(result, cwd);
+	return target.length > 0 ? theme.fg("accent", target) : "";
+}
+
+function renderPendingCallTitle(component: ApplyPatchCallRenderComponent, theme: ApplyPatchTheme): string {
+	const toolName = theme.fg("toolTitle", theme.bold("apply_patch"));
+	try {
+		const hunks = parsePatch(component.patchText);
+		if (hunks.length === 1) {
+			const hunk = hunks[0];
+			if (hunk) {
+				const pathText = renderPathText(hunk.filePath, component.cwd, theme);
+				if (hunk.type === "update" && hunk.movePath !== undefined) {
+					return `${toolName} ${theme.fg("toolTitle", "Patching")} ${pathText} ${theme.fg("muted", "→")} ${renderPathText(hunk.movePath, component.cwd, theme)}`;
+				}
+				return `${toolName} ${theme.fg("toolTitle", "Patching")} ${pathText}`;
+			}
 		}
-		if (component.result && component.result.failures.length > 0) {
-			return `apply_patch ${target} ${lineSummary} failed`;
+		if (hunks.length > 1) {
+			return `${toolName} ${theme.fg("toolTitle", "Patching")} ${theme.fg("accent", `${hunks.length} files`)}`;
 		}
-		return `apply_patch ${target} ${lineSummary}`;
+	} catch {
+		// Fall through to the resilient text path for incomplete patch input.
 	}
 
-	return component.callText.length > 0 ? `apply_patch ${component.callText}` : "apply_patch";
+	return component.callText.length > 0 ? `${toolName} ${theme.fg("toolTitle", component.callText)}` : toolName;
+}
+
+function renderApplyPatchCallTitle(component: ApplyPatchCallRenderComponent, theme: ApplyPatchTheme): string {
+	const toolName = theme.fg("toolTitle", theme.bold("apply_patch"));
+	if (component.preview) {
+		const target = renderPatchPreviewTarget(component.preview, component.cwd, theme);
+		const lineSummary = theme.fg("muted", formatLineCountSummary(component.preview.added, component.preview.removed));
+		if (component.progress) {
+			return `${toolName} ${theme.fg("toolTitle", `${component.progress.applied + component.progress.failed}/${component.progress.total}`)} ${target} ${lineSummary}`;
+		}
+		if (component.result && component.result.failures.length > 0) {
+			return `${toolName} ${target} ${lineSummary} ${theme.fg("error", "failed")}`;
+		}
+		return `${toolName} ${target} ${lineSummary}`;
+	}
+
+	if (component.result) {
+		const target = renderPatchResultTarget(component.result, component.cwd, theme);
+		if (component.result.failures.length > 0) {
+			return target.length > 0
+				? `${toolName} ${target} ${theme.fg("error", "failed")}`
+				: `${toolName} ${theme.fg("error", "failed")}`;
+		}
+		return target.length > 0 ? `${toolName} ${target}` : toolName;
+	}
+
+	return renderPendingCallTitle(component, theme);
 }
 
 function buildApplyPatchCallComponent(
@@ -261,13 +330,18 @@ function buildApplyPatchCallComponent(
 ): ApplyPatchCallRenderComponent {
 	component.setBgFn(getApplyPatchHeaderBg(component, theme));
 	component.clear();
-	component.addChild(new Text(theme.fg("toolTitle", theme.bold(formatApplyPatchCallTitle(component))), 0, 0));
+	component.addChild(new Text(renderApplyPatchCallTitle(component, theme), 0, 0));
 	if (component.preview) {
 		const body = renderPatchPreview(component.preview, component.cwd, theme, true, { omitSingleFileHeader: true });
 		if (body.length > 0) {
 			component.addChild(new Spacer(1));
 			component.addChild(new Text(body, 0, 0));
 		}
+	}
+	if (component.resultText !== undefined && component.resultText.length > 0) {
+		component.addChild(new Spacer(1));
+		const color = component.result?.failures.length ? "error" : "toolOutput";
+		component.addChild(new Text(theme.fg(color, component.resultText), 0, 0));
 	}
 	return component;
 }
@@ -278,11 +352,13 @@ function updateApplyPatchCallComponent(
 	cwd: string,
 	theme: ApplyPatchTheme,
 	settledError: boolean,
+	resultText?: string,
 ): ApplyPatchCallRenderComponent {
 	component.cwd = cwd;
 	component.preview = details?.preview;
 	component.progress = details?.progress;
 	component.result = details?.result;
+	component.resultText = resultText;
 	component.settledError = settledError;
 	return buildApplyPatchCallComponent(component, theme);
 }
@@ -758,7 +834,7 @@ function getApplyPatchRenderState(toolCallId: string, cwd: string, patchText: st
 		return existing;
 	}
 
-	const callText = formatInFlightCallText(patchText);
+	const callText = formatInFlightCallText(patchText, cwd);
 	const nextState: ApplyPatchRenderState = { cwd, patchText, callText };
 	applyPatchRenderStates.set(toolCallId, nextState);
 	return nextState;
@@ -902,13 +978,11 @@ function renderOpenCodeLikeDiffLine(
 	}
 
 	const diffColor = line.kind === "added" ? "toolDiffAdded" : "toolDiffRemoved";
-	const background = line.kind === "added" ? "toolSuccessBg" : "toolErrorBg";
 	const content =
 		contentOverride === undefined
 			? highlightDiffContent(line.content, filePath)
 			: theme.fg(diffColor, replaceTabs(contentOverride));
-	const rendered = `${theme.fg(diffColor, line.sign)}${lineNumber} ${content}`;
-	return theme.bg(background, rendered);
+	return theme.fg(diffColor, `${line.sign}${lineNumber} ${content}`);
 }
 
 function renderOpenCodeLikeDiff(diffText: string, filePath: string, theme: ApplyPatchTheme): string {
@@ -987,7 +1061,7 @@ function renderPatchPreview(
 			const renderFile = (file: ApplyPatchPreviewFile, omitHeader: boolean): string => {
 				const lines: string[] = [];
 				if (!omitHeader) {
-					lines.push(theme.fg("toolTitle", theme.bold(formatPatchFileHeader(file, cwd))));
+					lines.push(theme.bold(renderPatchFileHeader(file, cwd, theme)));
 				}
 				if (!file.diff) {
 					return lines.join("\n");
@@ -1593,6 +1667,7 @@ export function createApplyPatchTool(): ApplyPatchToolDefinition {
 			component.cwd = context.cwd;
 			component.progress = undefined;
 			component.result = undefined;
+			component.resultText = undefined;
 			component.settledError = false;
 			const normalizedArgs = normalizeApplyPatchArguments(args);
 			component.patchText = normalizedArgs.input;
@@ -1608,24 +1683,23 @@ export function createApplyPatchTool(): ApplyPatchToolDefinition {
 		},
 		renderResult(result, _options, theme, context) {
 			const component = new Container();
-			if (result.details?.preview) {
-				const callComponent = context.state.callComponent;
-				if (callComponent) {
-					updateApplyPatchCallComponent(callComponent, result.details, context.cwd, theme, context.isError);
-				}
-			}
-
-			if (!context.isError) {
-				return component;
-			}
-
+			const callComponent = context.state.callComponent;
+			const hasFailures = Boolean(result.details?.result?.failures.length);
 			const text = result.content
 				.filter((block) => block.type === "text")
 				.map((block) => block.text)
 				.filter((value) => typeof value === "string" && value.length > 0)
 				.join("\n");
-			if (text) {
-				component.addChild(new Text(theme.fg("toolOutput", text), 0, 0));
+			const visibleResultText = hasFailures || !result.details?.preview ? text : undefined;
+			if (callComponent) {
+				updateApplyPatchCallComponent(
+					callComponent,
+					result.details,
+					context.cwd,
+					theme,
+					context.isError || hasFailures,
+					visibleResultText,
+				);
 			}
 			return component;
 		},

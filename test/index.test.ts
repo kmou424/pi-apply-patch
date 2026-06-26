@@ -972,9 +972,48 @@ EOF`;
 *** End Patch`;
 
 		// when
-		const result = await createApplyPatchTool().execute("apply-patch-test", { input: patch }, undefined, undefined, {
+		const tool = createApplyPatchTool();
+		const result = await tool.execute("apply-patch-test", { input: patch }, undefined, undefined, {
 			cwd: directory,
 		} as never);
+		const state = {};
+		const callComponent = tool.renderCall?.(
+			{ input: patch },
+			identityTheme as never,
+			{
+				args: { input: patch },
+				argsComplete: true,
+				cwd: directory,
+				executionStarted: true,
+				expanded: false,
+				invalidate: () => undefined,
+				isError: false,
+				isPartial: true,
+				lastComponent: undefined,
+				showImages: false,
+				state,
+				toolCallId: "apply-patch-test",
+			} as never,
+		);
+		const resultComponent = tool.renderResult?.(
+			result,
+			{ expanded: false, isPartial: false },
+			identityTheme as never,
+			{
+				args: { input: patch },
+				argsComplete: true,
+				cwd: directory,
+				executionStarted: true,
+				expanded: false,
+				invalidate: () => undefined,
+				isError: false,
+				isPartial: false,
+				lastComponent: undefined,
+				showImages: false,
+				state,
+				toolCallId: "apply-patch-test",
+			} as never,
+		);
 
 		// then
 		const text = result.content.find((block) => block.type === "text")?.text ?? "";
@@ -985,6 +1024,11 @@ EOF`;
 		expect(text).toContain(
 			"Recovery: MUST NOT reread other files from this patch unless a specific dependency requires it.",
 		);
+		const rendered = callComponent?.render(160).join("\n") ?? "";
+		expect(rendered).toContain("apply_patch broken.txt failed");
+		expect(rendered).toContain("apply_patch partially failed.");
+		expect(rendered).toContain("Recovery: MUST read broken.txt before retrying.");
+		expect(resultComponent?.render(160).join("\n").trim()).toBe("");
 	});
 
 	it("#given successful patch write #when applying patch #then atomic temp files are cleaned", async () => {

@@ -13,6 +13,9 @@
 - Tests updated: outside-path tests expect success instead of rejection
 - Refactored apply_patch render system with stateful ApplyPatchCallRenderComponent for lifecycle-aware call/result rendering
 - Updated pending update text format to show file-specific patch targets with progress counters
+- Applied theme-aware rendering to call title with foreground/bold styling
+- Moved result text display into the call component with lifecycle management
+- Removed per-diff-line background colors, retaining only foreground diff colors
 
 ### Removed
 - Removed workspace boundary checks (isPathWithinWorkspace, findExistingAncestor)

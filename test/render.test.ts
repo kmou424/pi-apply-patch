@@ -330,9 +330,10 @@ describe("render helpers", () => {
 
 		// then
 		expect(resultRendered.trim()).toBe("");
-		expect(rendered).toContain("<bg:toolErrorBg><fg:toolDiffRemoved>-</fg:toolDiffRemoved><fg:muted>1</fg:muted>");
+		expect(rendered).toContain("<fg:accent>src/foo.ts</fg:accent>");
+		expect(rendered).toContain("<fg:toolDiffRemoved>-<fg:muted>1</fg:muted>");
 		expect(rendered).toContain("<fg:toolDiffRemoved>alpha <inverse>old</inverse></fg:toolDiffRemoved>");
-		expect(rendered).toContain("<bg:toolSuccessBg><fg:toolDiffAdded>+</fg:toolDiffAdded><fg:muted>1</fg:muted>");
+		expect(rendered).toContain("<fg:toolDiffAdded>+<fg:muted>1</fg:muted>");
 		expect(rendered).toContain("<fg:toolDiffAdded>alpha <inverse>new</inverse></fg:toolDiffAdded>");
 		expect(rendered).toContain("<fg:toolDiffContext> </fg:toolDiffContext><fg:muted>2</fg:muted> same");
 	});
@@ -365,7 +366,9 @@ describe("render helpers", () => {
 		// then
 		expect(resultRendered.trim()).toBe("");
 		expect(rendered).toContain("<bg:toolPendingBg>");
-		expect(rendered).toContain("<bold>apply_patch 1/2 src/foo.ts (+1 -1)</bold>");
+		expect(rendered).toContain("<fg:toolTitle>1/2</fg:toolTitle>");
+		expect(rendered).toContain("<fg:accent>src/foo.ts</fg:accent>");
+		expect(rendered).toContain("<fg:muted>(+1 -1)</fg:muted>");
 		expect(rendered).toContain("<fg:toolDiffRemoved>alpha <inverse>old</inverse></fg:toolDiffRemoved>");
 		expect(rendered).toContain("<fg:toolDiffAdded>alpha <inverse>new</inverse></fg:toolDiffAdded>");
 	});
@@ -397,7 +400,7 @@ describe("render helpers", () => {
 		expect(resultRendered.trim()).toBe("");
 	});
 
-	it("#given highlighted diff row #when rendering result in success box #then outer background resumes after row reset", () => {
+	it("#given highlighted diff row #when rendering result #then keeps diff foreground inside success box", () => {
 		// given
 		const result = {
 			content: [{ type: "text" as const, text: "update: src/foo.ts" }],
@@ -422,7 +425,58 @@ describe("render helpers", () => {
 		const { callRendered: rendered } = renderApplyPatchCallWithResult(result, ansiTheme);
 
 		// then
-		expect(rendered).toContain(`${bgReset}${successBg}`);
+		expect(rendered).toContain(successBg);
+		expect(rendered).toContain("+1 const value = 1;");
+	});
+
+	it("#given failed patch result #when rendering result #then shows recovery text in call component", () => {
+		// given
+		const result = {
+			content: [
+				{
+					type: "text" as const,
+					text: [
+						"apply_patch partially failed.",
+						"Failed: src/foo.ts",
+						"Recovery: MUST read src/foo.ts before retrying.",
+						"No file actions were applied.",
+					].join("\n"),
+				},
+			],
+			details: {
+				preview: {
+					files: [
+						{
+							filePath: "src/foo.ts",
+							operation: "update" as const,
+							diff: "-1 old\n+1 new",
+							added: 1,
+							removed: 1,
+						},
+					],
+					added: 1,
+					removed: 1,
+				},
+				result: {
+					appliedFiles: [],
+					details: { fuzz: 0 },
+					failures: [{ filePath: "src/foo.ts", operation: "update" as const, message: "missing context" }],
+					hasPartialSuccess: false,
+					recoveryInstructions: { mustNotReadFiles: [], mustReadFiles: ["src/foo.ts"] },
+					summaries: [],
+				},
+			},
+		};
+
+		// when
+		const { callRendered, resultRendered } = renderApplyPatchCallWithResult(result, markerTheme);
+
+		// then
+		expect(callRendered).toContain("<bg:toolErrorBg>");
+		expect(callRendered).toContain("<fg:error>failed</fg:error>");
+		expect(callRendered).toContain("apply_patch partially failed.");
+		expect(callRendered).toContain("Recovery: MUST read src/foo.ts before retrying.");
+		expect(resultRendered.trim()).toBe("");
 	});
 
 	it("#given large preview #when rendering result expanded #then shows truncation marker", () => {
