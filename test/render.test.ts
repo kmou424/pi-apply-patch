@@ -182,7 +182,7 @@ describe("render helpers", () => {
 				{
 					filePath: "/workspace/project/src/foo.ts",
 					operation: "update" as const,
-					diff: "-1 old\n+1 new",
+					diff: "- 1   old\n+   1 new",
 					added: 1,
 					removed: 1,
 				},
@@ -197,8 +197,8 @@ describe("render helpers", () => {
 
 		// then
 		expect(collapsed).toContain("Edited src/foo.ts (+1 -1)");
-		expect(collapsed).not.toContain("+1 new");
-		expect(expanded).toContain("+1 new");
+		expect(collapsed).not.toContain("+   1 new");
+		expect(expanded).toContain("+   1 new");
 	});
 
 	it("#given omitted optional args #when formatting preview #then keeps backward compatible defaults", () => {
@@ -208,7 +208,7 @@ describe("render helpers", () => {
 				{
 					filePath: "src/foo.ts",
 					operation: "update" as const,
-					diff: "-1 old\n+1 new",
+					diff: "- 1   old\n+   1 new",
 					added: 1,
 					removed: 1,
 				},
@@ -222,7 +222,7 @@ describe("render helpers", () => {
 
 		// then
 		expect(rendered).toContain("Edited src/foo.ts (+1 -1)");
-		expect(rendered).toContain("+1 new");
+		expect(rendered).toContain("+   1 new");
 	});
 
 	it("#given cached state #when clearing #then reset helper is callable", () => {
@@ -322,7 +322,7 @@ describe("render helpers", () => {
 						{
 							filePath: "src/foo.ts",
 							operation: "update" as const,
-							diff: '+1 "qdsdk/util/secrets"',
+							diff: '+   1 "qdsdk/util/secrets"',
 							added: 1,
 							removed: 0,
 						},
@@ -350,7 +350,7 @@ describe("render helpers", () => {
 						{
 							filePath: "src/foo.ts",
 							operation: "update" as const,
-							diff: "-1 old\n+1 new",
+							diff: "- 1   old\n+   1 new",
 							added: 1,
 							removed: 1,
 						},
@@ -366,8 +366,8 @@ describe("render helpers", () => {
 
 		// then
 		expect(callRendered).toContain("apply_patch src/foo.ts (+1 -1)");
-		expect(callRendered).toContain("-1 old");
-		expect(callRendered).toContain("+1 new");
+		expect(callRendered).toContain("- 1   old");
+		expect(callRendered).toContain("+   1 new");
 		expect(resultRendered.trim()).toBe("");
 	});
 
@@ -381,7 +381,7 @@ describe("render helpers", () => {
 						{
 							filePath: "src/foo.ts",
 							operation: "update" as const,
-							diff: "-1 alpha old\n+1 alpha new\n 2 same",
+							diff: "- 1   alpha old\n+   1 alpha new\n  2 2 same",
 							added: 1,
 							removed: 1,
 						},
@@ -398,11 +398,15 @@ describe("render helpers", () => {
 		// then
 		expect(resultRendered.trim()).toBe("");
 		expect(rendered).toContain("<fg:accent>src/foo.ts</fg:accent>");
-		expect(rendered).toContain("<fg:toolDiffRemoved>-<fg:muted>1</fg:muted>");
+		expect(rendered).toContain("<fg:toolDiffRemoved>-</fg:toolDiffRemoved> <fg:muted>1</fg:muted>");
 		expect(rendered).toContain("<fg:toolDiffRemoved>alpha <inverse>old</inverse></fg:toolDiffRemoved>");
-		expect(rendered).toContain("<fg:toolDiffAdded>+<fg:muted>1</fg:muted>");
+		expect(rendered).toContain(
+			"<fg:toolDiffAdded>+</fg:toolDiffAdded> <fg:muted> </fg:muted> <fg:muted>1</fg:muted>",
+		);
 		expect(rendered).toContain("<fg:toolDiffAdded>alpha <inverse>new</inverse></fg:toolDiffAdded>");
-		expect(rendered).toContain("<fg:toolDiffContext> </fg:toolDiffContext><fg:muted>2</fg:muted> same");
+		expect(rendered).toContain(
+			"<fg:toolDiffContext> </fg:toolDiffContext> <fg:muted>2</fg:muted> <fg:muted>2</fg:muted> same",
+		);
 	});
 
 	it("#given partial progress preview #when rendering result #then shows realtime progress in pending widget", () => {
@@ -416,7 +420,7 @@ describe("render helpers", () => {
 						{
 							filePath: "src/foo.ts",
 							operation: "update" as const,
-							diff: "-1 alpha old\n+1 alpha new",
+							diff: "- 1   alpha old\n+   1 alpha new",
 							added: 1,
 							removed: 1,
 						},
@@ -447,8 +451,8 @@ describe("render helpers", () => {
 			details: {
 				preview: {
 					files: [
-						{ filePath: "src/a.ts", operation: "update" as const, diff: "+1 one", added: 1, removed: 0 },
-						{ filePath: "src/b.ts", operation: "update" as const, diff: "+1 two", added: 1, removed: 0 },
+						{ filePath: "src/a.ts", operation: "update" as const, diff: "+   1 one", added: 1, removed: 0 },
+						{ filePath: "src/b.ts", operation: "update" as const, diff: "+   1 two", added: 1, removed: 0 },
 					],
 					added: 2,
 					removed: 0,
@@ -463,7 +467,7 @@ describe("render helpers", () => {
 		expect(rendered).toContain("apply_patch 2 files (+2 -0)");
 		expect(rendered).toContain("Edited src/a.ts (+1 -0)");
 		expect(rendered).toContain("Edited src/b.ts (+1 -0)");
-		expect(rendered).toContain("+1 one");
+		expect(rendered).toContain("+   1 one");
 		expect(resultRendered.trim()).toBe("");
 	});
 
@@ -477,7 +481,7 @@ describe("render helpers", () => {
 						{
 							filePath: "src/foo.ts",
 							operation: "update" as const,
-							diff: "+1 const value = 1;",
+							diff: "+   1 const value = 1;",
 							added: 1,
 							removed: 0,
 						},
@@ -493,7 +497,7 @@ describe("render helpers", () => {
 
 		// then
 		expect(rendered).toContain(successBg);
-		expect(rendered).toContain("+1 const value = 1;");
+		expect(rendered).toContain("+   1 const value = 1;");
 	});
 
 	it("#given ansi styled diff #when rendering result #then every block line has the same width", () => {
@@ -506,7 +510,7 @@ describe("render helpers", () => {
 						{
 							filePath: "src/foo.ts",
 							operation: "update" as const,
-							diff: "-1 alpha old\n+1 alpha new\n 2 same",
+							diff: "- 1   alpha old\n+   1 alpha new\n  2 2 same",
 							added: 1,
 							removed: 1,
 						},
@@ -553,7 +557,7 @@ describe("render helpers", () => {
 						{
 							filePath: "src/foo.ts",
 							operation: "update" as const,
-							diff: "-1 old\n+1 new",
+							diff: "- 1   old\n+   1 new",
 							added: 1,
 							removed: 1,
 						},
@@ -585,7 +589,9 @@ describe("render helpers", () => {
 
 	it("#given large line-bounded preview #when rendering result expanded #then keeps all diff lines", () => {
 		// given
-		const diff = Array.from({ length: 50 }, (_, index) => `+${index + 1} line`).join("\n");
+		const diff = Array.from({ length: 50 }, (_, index) => `+    ${String(index + 1).padStart(2, " ")} line`).join(
+			"\n",
+		);
 		const result = {
 			content: [{ type: "text" as const, text: "update: src/large.ts" }],
 			details: {
@@ -602,8 +608,8 @@ describe("render helpers", () => {
 
 		// then
 		expect(rendered).toContain("apply_patch src/large.ts (+50 -0)");
-		expect(rendered).toContain("+1 line");
-		expect(rendered).toContain("+50 line");
+		expect(rendered).toContain("+     1 line");
+		expect(rendered).toContain("+    50 line");
 		expect(rendered).not.toContain("...");
 		expect(rendered).not.toContain("…");
 	});

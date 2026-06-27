@@ -291,10 +291,10 @@ describe("pi-apply-patch", () => {
 		}
 		expect(update.text).toContain("Patching 2 files 0/2");
 		expect(update.text).toContain("sample.txt (+1 -1)");
-		expect(update.text).toContain("-1 before");
-		expect(update.text).toContain("+1 after");
+		expect(update.text).toContain("- 1   before");
+		expect(update.text).toContain("+   1 after");
 		expect(update.text).toContain("created.txt (+1 -0)");
-		expect(update.text).toContain("+1 created");
+		expect(update.text).toContain("+   1 created");
 		expect(update.text).not.toContain("Index:");
 
 		const state = {};
@@ -339,7 +339,7 @@ describe("pi-apply-patch", () => {
 		expect(rendered).toContain("apply_patch 0/2 2 files (+2 -1)");
 		expect(resultComponent?.render(120).join("\n").trim()).toBe("");
 		expect(rendered).toContain("sample.txt (+1 -1)");
-		expect(rendered).toContain("+1 after");
+		expect(rendered).toContain("+   1 after");
 		expect(rendered).not.toContain("Index:");
 	});
 
@@ -403,8 +403,8 @@ describe("pi-apply-patch", () => {
 		expect(result.details?.preview).toBeDefined();
 		expect(rendered).toContain("apply_patch sample.txt (+1 -1)");
 		expect(resultComponent?.render(120).join("\n").trim()).toBe("");
-		expect(rendered).toContain("-1 before");
-		expect(rendered).toContain("+1 after");
+		expect(rendered).toContain("- 1   before");
+		expect(rendered).toContain("+   1 after");
 		expect(await readFile(path.join(directory, "sample.txt"), "utf-8")).toBe("after\n");
 	});
 
@@ -439,7 +439,7 @@ describe("pi-apply-patch", () => {
 
 		// then
 		expect(updates[0]).toContain("Patching sample.txt 0/1");
-		expect(updates[0]).toContain("-1 before");
+		expect(updates[0]).toContain("- 1   before");
 		expect(updates[0]).not.toContain(path.basename(directory));
 		expect(await readFile(absoluteFilePath, "utf-8")).toBe("after\n");
 	});
@@ -472,8 +472,8 @@ describe("pi-apply-patch", () => {
 		);
 
 		// then
-		expect(updates[0]).toContain("-30 line-30");
-		expect(updates[0]).toContain("+30 line-30 updated");
+		expect(updates[0]).toContain("- 30    line-30");
+		expect(updates[0]).toContain("+    30 line-30 updated");
 		expect(updates[0]).not.toContain(" 1 line-1");
 		expect(await readFile(path.join(directory, "large.txt"), "utf-8")).toContain("line-30 updated");
 	});
@@ -506,16 +506,16 @@ describe("pi-apply-patch", () => {
 		);
 
 		// then
-		expect(updates[0]).toContain(" 6 line-6");
-		expect(updates[0]).toContain("-10 line-10");
-		expect(updates[0]).toContain("+10 line-10 updated");
-		expect(updates[0]).toContain(" 14 line-14");
-		expect(updates[0]).toContain("   ...");
+		expect(updates[0]).toContain("  6  6 line-6");
+		expect(updates[0]).toContain("- 10    line-10");
+		expect(updates[0]).toContain("+    10 line-10 updated");
+		expect(updates[0]).toContain(" 14 14 line-14");
+		expect(updates[0]).toContain("      ...");
 		expect(updates[0]).not.toContain(" 1 line-1");
 		expect(updates[0]).not.toContain(" 20 line-20");
 	});
 
-	it("#given inserted line #when previewing diff #then context line numbers use the new file", async () => {
+	it("#given inserted line #when previewing diff #then shows old and new line numbers", async () => {
 		// given
 		const directory = await createTempDirectory();
 		await writeFile(
@@ -563,51 +563,60 @@ describe("pi-apply-patch", () => {
 		);
 
 		// then
-		expect(updates[0]).toContain('+ 8 \t"qdsdk/util/secrets"');
-		expect(updates[0]).toContain(" 9 )");
-		expect(updates[0]).not.toContain(" 8 )");
+		expect(updates[0]).toContain('+     8 \t"qdsdk/util/secrets"');
+		expect(updates[0]).toContain("  8  9 )");
+		expect(updates[0]).not.toContain("  8  8 )");
 	});
 
 	it("#given multiple distant hunks #when truncating preview #then keeps every changed line", () => {
 		// given
 		const diff = [
-			"    ...",
-			" 11 old-import-a",
-			" 12 old-import-b",
-			" 13 old-import-c",
-			" 14 old-import-d",
-			"+15 new-import",
-			" 16 )",
-			" 17",
-			" 18 const (",
-			' 19 status = "paid"',
-			"    ...",
-			" 172 }",
-			" 173 if app == nil {",
-			' 174 return fmt.Errorf("delivery: app %d not found", order.AppID)',
-			" 175 }",
-			"-176 old-secret",
-			...Array.from({ length: 17 }, (_, index) => `+${177 + index} new-secret-${index + 1}`),
+			"       ...",
+			"  11  11 old-import-a",
+			"  12  12 old-import-b",
+			"  13  13 old-import-c",
+			"  14  14 old-import-d",
+			"+      15 new-import",
+			"  15  16 )",
+			"  16  17",
+			"  17  18 const (",
+			'  18  19 status = "paid"',
+			"       ...",
+			" 171 172 }",
+			" 172 173 if app == nil {",
+			' 173 174 return fmt.Errorf("delivery: app %d not found", order.AppID)',
+			" 174 175 }",
+			"- 175    old-secret",
+			...Array.from(
+				{ length: 17 },
+				(_, index) => `+     ${String(176 + index).padStart(3, " ")} new-secret-${index + 1}`,
+			),
 		].join("\n");
 
 		// when
 		const preview = truncatePreview(diff);
 
 		// then
-		expect(preview).toContain("+15 new-import");
-		expect(preview).toContain(" 173 if app == nil {");
-		expect(preview).toContain("-176 old-secret");
-		expect(preview).toContain("+177 new-secret-1");
-		expect(preview).toContain("+193 new-secret-17");
+		expect(preview).toContain("+      15 new-import");
+		expect(preview).toContain(" 172 173 if app == nil {");
+		expect(preview).toContain("- 175    old-secret");
+		expect(preview).toContain("+     176 new-secret-1");
+		expect(preview).toContain("+     192 new-secret-17");
 	});
 
 	it("#given large generated diff #when truncating #then keeps all line-bounded diff content", () => {
 		// given
 		const diff = [
-			...Array.from({ length: 29 }, (_, index) => ` ${String(index + 1).padStart(2, " ")} line-${index + 1}`),
-			"-30 line-30",
-			"+30 line-30 updated",
-			...Array.from({ length: 10 }, (_, index) => ` ${String(index + 31).padStart(2, " ")} line-${index + 31}`),
+			...Array.from({ length: 29 }, (_, index) => {
+				const lineNumber = String(index + 1).padStart(2, " ");
+				return ` ${lineNumber} ${lineNumber} line-${index + 1}`;
+			}),
+			"-30    line-30",
+			"+   30 line-30 updated",
+			...Array.from({ length: 10 }, (_, index) => {
+				const lineNumber = String(index + 31).padStart(2, " ");
+				return ` ${lineNumber} ${lineNumber} line-${index + 31}`;
+			}),
 		].join("\n");
 
 		// when
@@ -615,10 +624,10 @@ describe("pi-apply-patch", () => {
 
 		// then
 		expect(preview).toBe(diff);
-		expect(preview).toContain("-30 line-30");
-		expect(preview).toContain("+30 line-30 updated");
-		expect(preview).toContain("  1 line-1");
-		expect(preview).toContain(" 40 line-40");
+		expect(preview).toContain("-30    line-30");
+		expect(preview).toContain("+   30 line-30 updated");
+		expect(preview).toContain("  1  1 line-1");
+		expect(preview).toContain(" 40 40 line-40");
 	});
 
 	it("#given multi file apply_patch tool execution #when applying #then emits realtime progress updates", async () => {
@@ -715,8 +724,8 @@ describe("pi-apply-patch", () => {
 
 		// then
 		expect(updates[0]).toContain("Patching existing.txt 0/1");
-		expect(updates[0]).toContain("-1 old");
-		expect(updates[0]).toContain("+1 new");
+		expect(updates[0]).toContain("- 1   old");
+		expect(updates[0]).toContain("+   1 new");
 		expect(await readFile(path.join(directory, "existing.txt"), "utf-8")).toBe("new\n");
 	});
 

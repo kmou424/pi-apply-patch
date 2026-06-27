@@ -526,6 +526,19 @@ function createPatchDiff(
 	let added = 0;
 	let removed = 0;
 	let lastWasChange = false;
+	const formatDiffLine = (
+		sign: "+" | "-" | " ",
+		oldLine: number | undefined,
+		newLine: number | undefined,
+		line: string,
+	): string => {
+		const oldText =
+			oldLine === undefined ? "".padStart(lineNumWidth, " ") : String(oldLine).padStart(lineNumWidth, " ");
+		const newText =
+			newLine === undefined ? "".padStart(lineNumWidth, " ") : String(newLine).padStart(lineNumWidth, " ");
+		return `${sign} ${oldText} ${newText} ${line}`;
+	};
+	const formatSkippedLine = (): string => formatDiffLine(" ", undefined, undefined, "...");
 
 	for (let partIndex = 0; partIndex < parts.length; partIndex++) {
 		const part = parts[partIndex];
@@ -540,13 +553,13 @@ function createPatchDiff(
 		if (part.added || part.removed) {
 			for (const line of rawLines) {
 				if (part.added) {
-					output.push(`+${String(newLineNum).padStart(lineNumWidth, " ")} ${line}`);
+					output.push(formatDiffLine("+", undefined, newLineNum, line));
 					newLineNum++;
 					added++;
 					continue;
 				}
 
-				output.push(`-${String(oldLineNum).padStart(lineNumWidth, " ")} ${line}`);
+				output.push(formatDiffLine("-", oldLineNum, undefined, line));
 				oldLineNum++;
 				removed++;
 			}
@@ -562,7 +575,7 @@ function createPatchDiff(
 		if (hasLeadingChange && hasTrailingChange) {
 			if (rawLines.length <= contextLines * 2) {
 				for (const line of rawLines) {
-					output.push(` ${String(newLineNum).padStart(lineNumWidth, " ")} ${line}`);
+					output.push(formatDiffLine(" ", oldLineNum, newLineNum, line));
 					oldLineNum++;
 					newLineNum++;
 				}
@@ -572,15 +585,15 @@ function createPatchDiff(
 				const skippedLines = rawLines.length - leadingLines.length - trailingLines.length;
 
 				for (const line of leadingLines) {
-					output.push(` ${String(newLineNum).padStart(lineNumWidth, " ")} ${line}`);
+					output.push(formatDiffLine(" ", oldLineNum, newLineNum, line));
 					oldLineNum++;
 					newLineNum++;
 				}
-				output.push(` ${"".padStart(lineNumWidth, " ")} ...`);
+				output.push(formatSkippedLine());
 				oldLineNum += skippedLines;
 				newLineNum += skippedLines;
 				for (const line of trailingLines) {
-					output.push(` ${String(newLineNum).padStart(lineNumWidth, " ")} ${line}`);
+					output.push(formatDiffLine(" ", oldLineNum, newLineNum, line));
 					oldLineNum++;
 					newLineNum++;
 				}
@@ -589,24 +602,24 @@ function createPatchDiff(
 			const shownLines = rawLines.slice(0, contextLines);
 			const skippedLines = rawLines.length - shownLines.length;
 			for (const line of shownLines) {
-				output.push(` ${String(newLineNum).padStart(lineNumWidth, " ")} ${line}`);
+				output.push(formatDiffLine(" ", oldLineNum, newLineNum, line));
 				oldLineNum++;
 				newLineNum++;
 			}
 			if (skippedLines > 0) {
-				output.push(` ${"".padStart(lineNumWidth, " ")} ...`);
+				output.push(formatSkippedLine());
 				oldLineNum += skippedLines;
 				newLineNum += skippedLines;
 			}
 		} else if (hasTrailingChange) {
 			const skippedLines = Math.max(0, rawLines.length - contextLines);
 			if (skippedLines > 0) {
-				output.push(` ${"".padStart(lineNumWidth, " ")} ...`);
+				output.push(formatSkippedLine());
 				oldLineNum += skippedLines;
 				newLineNum += skippedLines;
 			}
 			for (const line of rawLines.slice(skippedLines)) {
-				output.push(` ${String(newLineNum).padStart(lineNumWidth, " ")} ${line}`);
+				output.push(formatDiffLine(" ", oldLineNum, newLineNum, line));
 				oldLineNum++;
 				newLineNum++;
 			}
@@ -777,32 +790,51 @@ function formatPendingPatchPaths(patchText: string): string {
 	return `${text}...`;
 }
 
-type RenderableAddedDiffLine = { content: string; kind: "added"; lineNumber: string; sign: "+" };
-type RenderableRemovedDiffLine = { content: string; kind: "removed"; lineNumber: string; sign: "-" };
-type RenderableContextDiffLine = { content: string; kind: "context"; lineNumber: string; sign: " " };
+type RenderableAddedDiffLine = {
+	content: string;
+	kind: "added";
+	newLineNumber: string;
+	oldLineNumber: string;
+	sign: "+";
+};
+type RenderableRemovedDiffLine = {
+	content: string;
+	kind: "removed";
+	newLineNumber: string;
+	oldLineNumber: string;
+	sign: "-";
+};
+type RenderableContextDiffLine = {
+	content: string;
+	kind: "context";
+	newLineNumber: string;
+	oldLineNumber: string;
+	sign: " ";
+};
 type RenderableContentDiffLine = RenderableAddedDiffLine | RenderableContextDiffLine | RenderableRemovedDiffLine;
 type RenderableDiffLine = RenderableContentDiffLine | { kind: "meta"; text: string };
 
 function parseRenderableDiffLine(line: string): RenderableDiffLine {
-	const match = line.match(/^([+\- ])(\s*\d*)\s(.*)$/);
+	const match = line.match(/^([+\- ])\s(\s*\d*)\s(\s*\d*)\s(.*)$/);
 	if (!match) {
 		return { kind: "meta", text: line };
 	}
 
 	const sign = match[1];
-	const lineNumber = match[2];
-	if ((sign !== "+" && sign !== "-" && sign !== " ") || lineNumber === undefined) {
+	const oldLineNumber = match[2];
+	const newLineNumber = match[3];
+	if ((sign !== "+" && sign !== "-" && sign !== " ") || oldLineNumber === undefined || newLineNumber === undefined) {
 		return { kind: "meta", text: line };
 	}
 
-	const content = match[3] ?? "";
+	const content = match[4] ?? "";
 	if (sign === "+") {
-		return { content, kind: "added", lineNumber, sign };
+		return { content, kind: "added", newLineNumber, oldLineNumber, sign };
 	}
 	if (sign === "-") {
-		return { content, kind: "removed", lineNumber, sign };
+		return { content, kind: "removed", newLineNumber, oldLineNumber, sign };
 	}
-	return { content, kind: "context", lineNumber, sign };
+	return { content, kind: "context", newLineNumber, oldLineNumber, sign };
 }
 
 function replaceTabs(text: string): string {
@@ -872,17 +904,15 @@ function renderOpenCodeLikeDiffLine(
 	theme: ApplyPatchTheme,
 	contentOverride?: string,
 ): string {
-	const lineNumber = theme.fg("muted", line.lineNumber);
+	const lineNumbers = `${theme.fg("muted", line.oldLineNumber)} ${theme.fg("muted", line.newLineNumber)}`;
 	if (line.kind === "context") {
-		return `${theme.fg("toolDiffContext", line.sign)}${lineNumber} ${highlightDiffContent(line.content, filePath)}`;
+		return `${theme.fg("toolDiffContext", line.sign)} ${lineNumbers} ${highlightDiffContent(line.content, filePath)}`;
 	}
 
 	const diffColor = line.kind === "added" ? "toolDiffAdded" : "toolDiffRemoved";
 	const content =
-		contentOverride === undefined
-			? highlightDiffContent(line.content, filePath)
-			: theme.fg(diffColor, replaceTabs(contentOverride));
-	return theme.fg(diffColor, `${line.sign}${lineNumber} ${content}`);
+		contentOverride === undefined ? highlightDiffContent(line.content, filePath) : replaceTabs(contentOverride);
+	return `${theme.fg(diffColor, line.sign)} ${lineNumbers} ${theme.fg(diffColor, content)}`;
 }
 
 function renderOpenCodeLikeDiff(diffText: string, filePath: string, theme: ApplyPatchTheme): string {

@@ -21,6 +21,7 @@
 - Replaced Unicode ellipsis truncation marker with ASCII ... and added line-number padding to truncation lines
 - Simplified background rendering by replacing `applyLayeredBackground` helper with direct `theme.bg()` calls
 - Removed line-bounded truncation from truncatePreview; now restricts previews only by character count
+- Diff output now shows both old and new line numbers side by side in unified diff format, with blank columns for missing numbers on added/removed lines
 
 ### Removed
 - Removed workspace boundary checks (isPathWithinWorkspace, findExistingAncestor)
