@@ -1,3 +1,4 @@
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import {
 	clearApplyPatchRenderState,
@@ -36,9 +37,22 @@ const ansiTheme = {
 	inverse: (text: string) => text,
 };
 
+const edgeTheme = {
+	fg: (name: string, text: string) => {
+		const color = name === "toolDiffAdded" ? "32" : name === "toolDiffRemoved" ? "31" : "36";
+		return `\x1b[${color}m${text}\x1b[39m`;
+	},
+	bg: (name: string, text: string) => {
+		const start = name === "toolSuccessBg" ? successBg : "\x1b[48;2;40;40;50m";
+		return `${start}${text}${bgReset}`;
+	},
+	bold: (text: string) => `\x1b[1m${text}\x1b[22m`,
+	inverse: (text: string) => `\x1b[7m${text}\x1b[27m`,
+};
+
 function renderApplyPatchCallWithResult(
 	result: Parameters<NonNullable<ReturnType<typeof createApplyPatchTool>["renderResult"]>>[0],
-	theme: typeof identityTheme | typeof markerTheme | typeof ansiTheme = identityTheme,
+	theme: typeof identityTheme | typeof markerTheme | typeof ansiTheme | typeof edgeTheme = identityTheme,
 	args = { input: "" },
 ): { callRendered: string; resultRendered: string } {
 	const tool = createApplyPatchTool();
@@ -430,6 +444,43 @@ describe("render helpers", () => {
 		// then
 		expect(rendered).toContain(successBg);
 		expect(rendered).toContain("+1 const value = 1;");
+	});
+
+	it("#given ansi styled diff #when rendering result #then every block line has the same width", () => {
+		// given
+		const result = {
+			content: [{ type: "text" as const, text: "update: src/foo.ts" }],
+			details: {
+				preview: {
+					files: [
+						{
+							filePath: "src/foo.ts",
+							operation: "update" as const,
+							diff: "-1 alpha old\n+1 alpha new\n 2 same",
+							added: 1,
+							removed: 1,
+						},
+					],
+					added: 1,
+					removed: 1,
+				},
+				result: {
+					appliedFiles: ["src/foo.ts"],
+					details: { fuzz: 0 },
+					failures: [],
+					hasPartialSuccess: false,
+					recoveryInstructions: { mustNotReadFiles: [], mustReadFiles: [] },
+					summaries: ["update: src/foo.ts"],
+				},
+			},
+		};
+
+		// when
+		const { callRendered } = renderApplyPatchCallWithResult(result, edgeTheme);
+		const widths = callRendered.split("\n").map((line) => visibleWidth(line));
+
+		// then
+		expect(new Set(widths)).toEqual(new Set([240]));
 	});
 
 	it("#given failed patch result #when rendering result #then shows recovery text in call component", () => {

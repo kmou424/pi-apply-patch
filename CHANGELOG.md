@@ -6,6 +6,7 @@
 - Initial standalone `apply_patch` pi extension.
 - Context-aware diff truncation with ... markers for pi-style edit format
 - Path normalization for ~, file://, and unicode spaces
+- Added test verifying uniform line width in ANSI-styled diff output
 
 ### Changed
 - Path resolution relaxed to allow patches targeting files outside cwd
@@ -17,9 +18,11 @@
 - Moved result text display into the call component with lifecycle management
 - Removed per-diff-line background colors, retaining only foreground diff colors
 - Replaced Unicode ellipsis truncation marker with ASCII ... and added line-number padding to truncation lines
+- Simplified background rendering by replacing `applyLayeredBackground` helper with direct `theme.bg()` calls
 
 ### Removed
 - Removed workspace boundary checks (isPathWithinWorkspace, findExistingAncestor)
+- Removed `applyLayeredBackground` utility function
 
 ### Fixed
 - Relaxed parseRenderableDiffLine regex to accept empty line numbers for truncation lines
