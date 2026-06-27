@@ -188,7 +188,7 @@ export const PATCH_PREVIEW_MAX_LINES = 16;
 export const PATCH_PREVIEW_MAX_CHARS = 4000;
 const PATCH_PREVIEW_HEAD_LINES = 8;
 const PATCH_PREVIEW_TAIL_LINES = PATCH_PREVIEW_MAX_LINES - PATCH_PREVIEW_HEAD_LINES - 1;
-const PATCH_PREVIEW_TRUNCATION_MARKER = "…";
+const PATCH_PREVIEW_TRUNCATION_MARKER = "...";
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const applyPatchRenderStates = new Map<string, ApplyPatchRenderState>();
 
@@ -390,13 +390,29 @@ function countWindowLines(lines: string[], start: number, end: number): number {
 	return end - start + (start > 0 ? 1 : 0) + (end < lines.length ? 1 : 0);
 }
 
+function getDiffLineNumberWidth(lines: string[]): number {
+	let width = 1;
+	for (const line of lines) {
+		const match = line.match(/^[+\- ](\s*\d+)\s/);
+		if (match?.[1]) {
+			width = Math.max(width, match[1].length);
+		}
+	}
+	return width;
+}
+
+function formatDiffTruncationLine(lines: string[]): string {
+	return ` ${"".padStart(getDiffLineNumberWidth(lines), " ")} ${PATCH_PREVIEW_TRUNCATION_MARKER}`;
+}
+
 function formatPreviewWindow(lines: string[], start: number, end: number): string {
 	const previewLines = lines.slice(start, end);
+	const truncationLine = formatDiffTruncationLine(lines);
 	if (start > 0) {
-		previewLines.unshift("…");
+		previewLines.unshift(truncationLine);
 	}
 	if (end < lines.length) {
-		previewLines.push("…");
+		previewLines.push(truncationLine);
 	}
 	return previewLines.join("\n");
 }
@@ -471,7 +487,11 @@ export function truncatePreview(text: string): string {
 	const changedHunkPreview = createChangedHunkPreview(lines);
 	const previewText =
 		changedHunkPreview ??
-		[...lines.slice(0, PATCH_PREVIEW_HEAD_LINES), "…", ...lines.slice(-PATCH_PREVIEW_TAIL_LINES)].join("\n");
+		[
+			...lines.slice(0, PATCH_PREVIEW_HEAD_LINES),
+			formatDiffTruncationLine(lines),
+			...lines.slice(-PATCH_PREVIEW_TAIL_LINES),
+		].join("\n");
 	return enforcePreviewCharLimit(previewText);
 }
 
@@ -884,7 +904,7 @@ type RenderableContentDiffLine = RenderableAddedDiffLine | RenderableContextDiff
 type RenderableDiffLine = RenderableContentDiffLine | { kind: "meta"; text: string };
 
 function parseRenderableDiffLine(line: string): RenderableDiffLine {
-	const match = line.match(/^([+\- ])(\s*\d+)\s(.*)$/);
+	const match = line.match(/^([+\- ])(\s*\d*)\s(.*)$/);
 	if (!match) {
 		return { kind: "meta", text: line };
 	}

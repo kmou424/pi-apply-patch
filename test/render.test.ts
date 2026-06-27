@@ -99,7 +99,8 @@ describe("render helpers", () => {
 		// then
 		expect(preview).toContain("line-1");
 		expect(preview).toContain(`line-${lines.length}`);
-		expect(preview).toContain("…");
+		expect(preview).toContain("...");
+		expect(preview).not.toContain("…");
 		expect(preview.split("\n")).toHaveLength(PATCH_PREVIEW_MAX_LINES);
 	});
 
@@ -113,7 +114,8 @@ describe("render helpers", () => {
 		// then
 		expect(preview.length).toBeLessThanOrEqual(PATCH_PREVIEW_MAX_CHARS);
 		expect(preview.split("\n").length).toBeLessThanOrEqual(PATCH_PREVIEW_MAX_LINES);
-		expect(preview).toContain("…");
+		expect(preview).toContain("...");
+		expect(preview).not.toContain("…");
 	});
 
 	it("#given oversized changed hunk #when truncating #then keeps max chars strict", () => {
@@ -129,7 +131,8 @@ describe("render helpers", () => {
 
 		// then
 		expect(preview.length).toBeLessThanOrEqual(PATCH_PREVIEW_MAX_CHARS);
-		expect(preview).toContain("…");
+		expect(preview).toContain("...");
+		expect(preview).not.toContain("…");
 	});
 
 	it("#given absolute path under cwd #when displaying #then returns relative path", () => {
@@ -498,6 +501,7 @@ describe("render helpers", () => {
 
 		// then
 		expect(rendered).toContain("apply_patch src/large.ts (+50 -0)");
-		expect(rendered).toContain("…");
+		expect(rendered).toContain("...");
+		expect(rendered).not.toContain("…");
 	});
 });

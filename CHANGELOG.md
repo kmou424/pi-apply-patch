@@ -16,6 +16,10 @@
 - Applied theme-aware rendering to call title with foreground/bold styling
 - Moved result text display into the call component with lifecycle management
 - Removed per-diff-line background colors, retaining only foreground diff colors
+- Replaced Unicode ellipsis truncation marker with ASCII ... and added line-number padding to truncation lines
 
 ### Removed
 - Removed workspace boundary checks (isPathWithinWorkspace, findExistingAncestor)
+
+### Fixed
+- Relaxed parseRenderableDiffLine regex to accept empty line numbers for truncation lines
