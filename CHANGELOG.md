@@ -7,6 +7,7 @@
 - Context-aware diff truncation with ... markers for pi-style edit format
 - Path normalization for ~, file://, and unicode spaces
 - Added test verifying uniform line width in ANSI-styled diff output
+- Added `renderShell: "self"` to apply_patch tool definition for self-managed shell rendering
 
 ### Changed
 - Path resolution relaxed to allow patches targeting files outside cwd
@@ -29,3 +30,4 @@
 ### Fixed
 - Relaxed parseRenderableDiffLine regex to accept empty line numbers for truncation lines
 - Context line numbers in createPatchDiff now use new-file line numbers instead of original file line numbers
+- Fixed nested background reset gap in ANSI output by allowing tool to manage its own shell

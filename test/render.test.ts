@@ -1,4 +1,4 @@
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { Box, Text, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import {
 	clearApplyPatchRenderState,
@@ -98,6 +98,14 @@ function renderApplyPatchCallWithResult(
 		callRendered: callComponent?.render(240).join("\n") ?? "",
 		resultRendered: resultComponent?.render(240).join("\n") ?? "",
 	};
+}
+
+function renderInsideDefaultToolShell(
+	inner: ReturnType<NonNullable<ReturnType<typeof createApplyPatchTool>["renderCall"]>>,
+): string {
+	const shell = new Box(1, 1, (text: string) => ansiTheme.bg("toolSuccessBg", text));
+	shell.addChild(inner);
+	return shell.render(80).join("\n");
 }
 
 describe("render helpers", () => {
@@ -282,6 +290,54 @@ describe("render helpers", () => {
 
 		// then
 		expect(rendered).toContain("apply_patch Patching 2 files");
+	});
+
+	it("#given apply_patch tool #when registered #then renders its own shell", () => {
+		// given / when
+		const tool = createApplyPatchTool();
+
+		// then
+		expect(tool.renderShell).toBe("self");
+	});
+
+	it("#given nested tool boxes #when rendering ansi output #then default shell would leave a right-edge gap", () => {
+		// given
+		const inner = new Box(1, 1, (text: string) => ansiTheme.bg("toolSuccessBg", text));
+		inner.addChild(new Text("body", 0, 0));
+
+		// when
+		const rendered = renderInsideDefaultToolShell(inner);
+
+		// then
+		expect(rendered).toContain(`${bgReset} ${bgReset}`);
+	});
+
+	it("#given self rendered apply_patch #when rendering ansi output #then avoids nested background reset gap", () => {
+		// given
+		const result = {
+			content: [{ type: "text" as const, text: "update: src/foo.ts" }],
+			details: {
+				preview: {
+					files: [
+						{
+							filePath: "src/foo.ts",
+							operation: "update" as const,
+							diff: '+1 "qdsdk/util/secrets"',
+							added: 1,
+							removed: 0,
+						},
+					],
+					added: 1,
+					removed: 0,
+				},
+			},
+		};
+
+		// when
+		const { callRendered } = renderApplyPatchCallWithResult(result, ansiTheme);
+
+		// then
+		expect(callRendered).not.toContain(`${bgReset} ${bgReset}`);
 	});
 
 	it("#given preview #when rendering result #then updates call component and leaves result empty", () => {

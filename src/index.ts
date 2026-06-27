@@ -1475,6 +1475,7 @@ export function createApplyPatchTool(): ApplyPatchToolDefinition {
 		description: APPLY_PATCH_FREEFORM_DESCRIPTION,
 		parameters: APPLY_PATCH_PARAMS,
 		prepareArguments: normalizeApplyPatchArguments,
+		renderShell: "self",
 		promptSnippet: "Apply Codex-format file patches with apply_patch",
 		promptGuidelines: [
 			"Use apply_patch for file edits instead of mutating files through bash, Python scripts, heredocs, or shell redirection.",
