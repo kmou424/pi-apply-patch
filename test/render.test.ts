@@ -7,7 +7,6 @@ import {
 	formatInFlightCallText,
 	formatPatchPreview,
 	PATCH_PREVIEW_MAX_CHARS,
-	PATCH_PREVIEW_MAX_LINES,
 	truncatePreview,
 } from "../src/index.js";
 
@@ -102,20 +101,16 @@ function renderApplyPatchCallWithResult(
 }
 
 describe("render helpers", () => {
-	it("#given plain text diff #when truncating #then falls back to head and tail", () => {
+	it("#given long line-bounded diff #when truncating #then keeps all lines", () => {
 		// given
-		const lines = Array.from({ length: PATCH_PREVIEW_MAX_LINES + 12 }, (_, index) => `line-${index + 1}`);
+		const lines = Array.from({ length: 40 }, (_, index) => `line-${index + 1}`);
 		const diff = lines.join("\n");
 
 		// when
 		const preview = truncatePreview(diff);
 
 		// then
-		expect(preview).toContain("line-1");
-		expect(preview).toContain(`line-${lines.length}`);
-		expect(preview).toContain("...");
-		expect(preview).not.toContain("…");
-		expect(preview.split("\n")).toHaveLength(PATCH_PREVIEW_MAX_LINES);
+		expect(preview).toBe(diff);
 	});
 
 	it("#given huge payload #when truncating #then enforces max chars", () => {
@@ -127,7 +122,6 @@ describe("render helpers", () => {
 
 		// then
 		expect(preview.length).toBeLessThanOrEqual(PATCH_PREVIEW_MAX_CHARS);
-		expect(preview.split("\n").length).toBeLessThanOrEqual(PATCH_PREVIEW_MAX_LINES);
 		expect(preview).toContain("...");
 		expect(preview).not.toContain("…");
 	});
@@ -533,7 +527,7 @@ describe("render helpers", () => {
 		expect(resultRendered.trim()).toBe("");
 	});
 
-	it("#given large preview #when rendering result expanded #then shows truncation marker", () => {
+	it("#given large line-bounded preview #when rendering result expanded #then keeps all diff lines", () => {
 		// given
 		const diff = Array.from({ length: 50 }, (_, index) => `+${index + 1} line`).join("\n");
 		const result = {
@@ -552,7 +546,9 @@ describe("render helpers", () => {
 
 		// then
 		expect(rendered).toContain("apply_patch src/large.ts (+50 -0)");
-		expect(rendered).toContain("...");
+		expect(rendered).toContain("+1 line");
+		expect(rendered).toContain("+50 line");
+		expect(rendered).not.toContain("...");
 		expect(rendered).not.toContain("…");
 	});
 });

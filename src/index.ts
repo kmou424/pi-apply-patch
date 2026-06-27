@@ -184,10 +184,7 @@ function hasErrorCode(error: unknown, code: string): boolean {
 }
 
 const GPT_APPLY_PATCH_PROVIDERS = new Set(["openai", "openai-codex", "azure-openai-responses", "github-copilot"]);
-export const PATCH_PREVIEW_MAX_LINES = 16;
 export const PATCH_PREVIEW_MAX_CHARS = 4000;
-const PATCH_PREVIEW_HEAD_LINES = 8;
-const PATCH_PREVIEW_TAIL_LINES = PATCH_PREVIEW_MAX_LINES - PATCH_PREVIEW_HEAD_LINES - 1;
 const PATCH_PREVIEW_TRUNCATION_MARKER = "...";
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const applyPatchRenderStates = new Map<string, ApplyPatchRenderState>();
@@ -363,94 +360,6 @@ function updateApplyPatchCallComponent(
 	return buildApplyPatchCallComponent(component, theme);
 }
 
-function isChangedPreviewLine(line: string): boolean {
-	return /^[+-]\s*\d+\s/.test(line);
-}
-
-function countWindowLines(lines: string[], start: number, end: number): number {
-	return end - start + (start > 0 ? 1 : 0) + (end < lines.length ? 1 : 0);
-}
-
-function getDiffLineNumberWidth(lines: string[]): number {
-	let width = 1;
-	for (const line of lines) {
-		const match = line.match(/^[+\- ](\s*\d+)\s/);
-		if (match?.[1]) {
-			width = Math.max(width, match[1].length);
-		}
-	}
-	return width;
-}
-
-function formatDiffTruncationLine(lines: string[]): string {
-	return ` ${"".padStart(getDiffLineNumberWidth(lines), " ")} ${PATCH_PREVIEW_TRUNCATION_MARKER}`;
-}
-
-function formatPreviewWindow(lines: string[], start: number, end: number): string {
-	const previewLines = lines.slice(start, end);
-	const truncationLine = formatDiffTruncationLine(lines);
-	if (start > 0) {
-		previewLines.unshift(truncationLine);
-	}
-	if (end < lines.length) {
-		previewLines.push(truncationLine);
-	}
-	return previewLines.join("\n");
-}
-
-function createChangedHunkPreview(lines: string[]): string | undefined {
-	const firstChangedLine = lines.findIndex(isChangedPreviewLine);
-	if (firstChangedLine === -1) {
-		return undefined;
-	}
-
-	let start = firstChangedLine;
-	let end = firstChangedLine + 1;
-	while (end < lines.length) {
-		const line = lines[end];
-		if (line === undefined || !isChangedPreviewLine(line)) {
-			break;
-		}
-		end++;
-	}
-
-	const changedHunkEnd = end;
-	while (end > start && countWindowLines(lines, start, end) > PATCH_PREVIEW_MAX_LINES) {
-		end--;
-	}
-
-	while (countWindowLines(lines, start, end) < PATCH_PREVIEW_MAX_LINES) {
-		const canAddBefore = start > 0;
-		const canAddAfter = end < lines.length;
-		if (!canAddBefore && !canAddAfter) {
-			break;
-		}
-
-		const beforeContextLines = firstChangedLine - start;
-		const afterContextLines = end - changedHunkEnd;
-		if (canAddBefore && (!canAddAfter || beforeContextLines <= afterContextLines)) {
-			start--;
-		} else {
-			end++;
-		}
-	}
-
-	return formatPreviewWindow(lines, start, end);
-}
-
-function countLines(text: string): number {
-	if (text.length === 0) {
-		return 0;
-	}
-	let lines = 1;
-	for (let index = 0; index < text.length; index++) {
-		if (text.charCodeAt(index) === 10) {
-			lines += 1;
-		}
-	}
-	return lines;
-}
-
 function enforcePreviewCharLimit(preview: string): string {
 	if (preview.length <= PATCH_PREVIEW_MAX_CHARS) {
 		return preview;
@@ -460,20 +369,10 @@ function enforcePreviewCharLimit(preview: string): string {
 }
 
 export function truncatePreview(text: string): string {
-	if (text.length <= PATCH_PREVIEW_MAX_CHARS && countLines(text) <= PATCH_PREVIEW_MAX_LINES) {
+	if (text.length <= PATCH_PREVIEW_MAX_CHARS) {
 		return text;
 	}
-
-	const lines = text.split("\n");
-	const changedHunkPreview = createChangedHunkPreview(lines);
-	const previewText =
-		changedHunkPreview ??
-		[
-			...lines.slice(0, PATCH_PREVIEW_HEAD_LINES),
-			formatDiffTruncationLine(lines),
-			...lines.slice(-PATCH_PREVIEW_TAIL_LINES),
-		].join("\n");
-	return enforcePreviewCharLimit(previewText);
+	return enforcePreviewCharLimit(text);
 }
 
 function normalizeApplyPatchArguments(args: unknown): ApplyPatchParams {
@@ -663,7 +562,7 @@ function createPatchDiff(
 		if (hasLeadingChange && hasTrailingChange) {
 			if (rawLines.length <= contextLines * 2) {
 				for (const line of rawLines) {
-					output.push(` ${String(oldLineNum).padStart(lineNumWidth, " ")} ${line}`);
+					output.push(` ${String(newLineNum).padStart(lineNumWidth, " ")} ${line}`);
 					oldLineNum++;
 					newLineNum++;
 				}
@@ -673,7 +572,7 @@ function createPatchDiff(
 				const skippedLines = rawLines.length - leadingLines.length - trailingLines.length;
 
 				for (const line of leadingLines) {
-					output.push(` ${String(oldLineNum).padStart(lineNumWidth, " ")} ${line}`);
+					output.push(` ${String(newLineNum).padStart(lineNumWidth, " ")} ${line}`);
 					oldLineNum++;
 					newLineNum++;
 				}
@@ -681,7 +580,7 @@ function createPatchDiff(
 				oldLineNum += skippedLines;
 				newLineNum += skippedLines;
 				for (const line of trailingLines) {
-					output.push(` ${String(oldLineNum).padStart(lineNumWidth, " ")} ${line}`);
+					output.push(` ${String(newLineNum).padStart(lineNumWidth, " ")} ${line}`);
 					oldLineNum++;
 					newLineNum++;
 				}
@@ -690,7 +589,7 @@ function createPatchDiff(
 			const shownLines = rawLines.slice(0, contextLines);
 			const skippedLines = rawLines.length - shownLines.length;
 			for (const line of shownLines) {
-				output.push(` ${String(oldLineNum).padStart(lineNumWidth, " ")} ${line}`);
+				output.push(` ${String(newLineNum).padStart(lineNumWidth, " ")} ${line}`);
 				oldLineNum++;
 				newLineNum++;
 			}
@@ -707,7 +606,7 @@ function createPatchDiff(
 				newLineNum += skippedLines;
 			}
 			for (const line of rawLines.slice(skippedLines)) {
-				output.push(` ${String(oldLineNum).padStart(lineNumWidth, " ")} ${line}`);
+				output.push(` ${String(newLineNum).padStart(lineNumWidth, " ")} ${line}`);
 				oldLineNum++;
 				newLineNum++;
 			}

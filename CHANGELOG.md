@@ -19,10 +19,13 @@
 - Removed per-diff-line background colors, retaining only foreground diff colors
 - Replaced Unicode ellipsis truncation marker with ASCII ... and added line-number padding to truncation lines
 - Simplified background rendering by replacing `applyLayeredBackground` helper with direct `theme.bg()` calls
+- Removed line-bounded truncation from truncatePreview; now restricts previews only by character count
 
 ### Removed
 - Removed workspace boundary checks (isPathWithinWorkspace, findExistingAncestor)
 - Removed `applyLayeredBackground` utility function
+- Removed PATCH_PREVIEW_MAX_LINES constant and associated line-window truncation helper functions
 
 ### Fixed
 - Relaxed parseRenderableDiffLine regex to accept empty line numbers for truncation lines
+- Context line numbers in createPatchDiff now use new-file line numbers instead of original file line numbers

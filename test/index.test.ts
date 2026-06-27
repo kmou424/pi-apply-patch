@@ -515,7 +515,93 @@ describe("pi-apply-patch", () => {
 		expect(updates[0]).not.toContain(" 20 line-20");
 	});
 
-	it("#given large generated diff #when truncating #then centers preview around first changed line", () => {
+	it("#given inserted line #when previewing diff #then context line numbers use the new file", async () => {
+		// given
+		const directory = await createTempDirectory();
+		await writeFile(
+			path.join(directory, "imports.go"),
+			[
+				"package demo",
+				"",
+				"import (",
+				'\t"go.uber.org/zap"',
+				"",
+				'\tqd_domain "qdsdk/internal/domain"',
+				'\tqd_dalproxy "qdsdk/shared/dalproxy"',
+				")",
+				"",
+				'const status = "paid"',
+				"",
+			].join("\n"),
+			"utf-8",
+		);
+		const tab = "\t";
+		const patch = [
+			"*** Begin Patch",
+			"*** Update File: imports.go",
+			"@@",
+			` ${tab}qd_domain "qdsdk/internal/domain"`,
+			` ${tab}qd_dalproxy "qdsdk/shared/dalproxy"`,
+			`+${tab}"qdsdk/util/secrets"`,
+			" )",
+			"*** End Patch",
+		].join("\n");
+		const updates: string[] = [];
+
+		// when
+		await createApplyPatchTool().execute(
+			"apply-patch-insert-numbering-test",
+			{ input: patch },
+			undefined,
+			(update) => {
+				const text = update.content.find((block) => block.type === "text")?.text;
+				if (text) {
+					updates.push(text);
+				}
+			},
+			{ cwd: directory } as never,
+		);
+
+		// then
+		expect(updates[0]).toContain('+ 8 \t"qdsdk/util/secrets"');
+		expect(updates[0]).toContain(" 9 )");
+		expect(updates[0]).not.toContain(" 8 )");
+	});
+
+	it("#given multiple distant hunks #when truncating preview #then keeps every changed line", () => {
+		// given
+		const diff = [
+			"    ...",
+			" 11 old-import-a",
+			" 12 old-import-b",
+			" 13 old-import-c",
+			" 14 old-import-d",
+			"+15 new-import",
+			" 16 )",
+			" 17",
+			" 18 const (",
+			' 19 status = "paid"',
+			"    ...",
+			" 172 }",
+			" 173 if app == nil {",
+			' 174 return fmt.Errorf("delivery: app %d not found", order.AppID)',
+			" 175 }",
+			"-176 old-secret",
+			...Array.from({ length: 17 }, (_, index) => `+${177 + index} new-secret-${index + 1}`),
+		].join("\n");
+
+		// when
+		const preview = truncatePreview(diff);
+
+		// then
+		expect(preview).toContain("+15 new-import");
+		expect(preview).toContain(" 173 if app == nil {");
+		expect(preview).toContain("-176 old-secret");
+		expect(preview).toContain("+177 new-secret-1");
+		expect(preview).toContain("+193 new-secret-17");
+	});
+
+	it("#given large generated diff #when truncating #then keeps all line-bounded diff content", () => {
 		// given
 		const diff = [
 			...Array.from({ length: 29 }, (_, index) => ` ${String(index + 1).padStart(2, " ")} line-${index + 1}`),
@@ -528,10 +614,11 @@ describe("pi-apply-patch", () => {
 		const preview = truncatePreview(diff);
 
 		// then
+		expect(preview).toBe(diff);
 		expect(preview).toContain("-30 line-30");
 		expect(preview).toContain("+30 line-30 updated");
-		expect(preview).not.toContain(" 1 line-1");
-		expect(preview).not.toContain(" 40 line-40");
+		expect(preview).toContain("  1 line-1");
+		expect(preview).toContain(" 40 line-40");
 	});
 
 	it("#given multi file apply_patch tool execution #when applying #then emits realtime progress updates", async () => {
